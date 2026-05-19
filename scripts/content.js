@@ -250,7 +250,7 @@ function ensureMiniPlayer() {
 
     // Request current state now that miniPlayer is in the DOM,
     // so re-entrancy via updateMiniPlayer → ensureMiniPlayer is safe.
-    safeSendMessage({ type: 'CMD_GET_STATE' }, (response) => {
+    safeSendMessage({ type: 'GET_STATE' }, (response) => {
         if (response && response.state) {
             updateMiniPlayer(response.state);
         }
@@ -258,13 +258,13 @@ function ensureMiniPlayer() {
 
     // Event listeners
     container.querySelector('.mini-toggle').addEventListener('click', () => {
-        safeSendMessage({ type: 'CMD_TOGGLE_PLAY' });
+        safeSendMessage({ type: 'TOGGLE_PLAY' });
     });
     container.querySelector('.mini-next').addEventListener('click', () => {
-        safeSendMessage({ type: 'CMD_NEXT' });
+        safeSendMessage({ type: 'NEXT' });
     });
     container.querySelector('.mini-stop').addEventListener('click', () => {
-        safeSendMessage({ type: 'CMD_STOP' });
+        safeSendMessage({ type: 'STOP' });
         hideMiniPlayer();
     });
     container.querySelector('.mini-close').addEventListener('click', () => {

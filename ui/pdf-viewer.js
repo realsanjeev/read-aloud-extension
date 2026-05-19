@@ -50,7 +50,6 @@ let uiState = {
     autoScroll: true,
     theme: 'auto'
   }
-};
 
 let voices = [];
 let contentReady = false;
@@ -121,7 +120,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       contentReady = true;
       const saved = await getSavedPosition(pdfUrl);
       const index = saved && saved.index > 0 ? saved.index : 0;
-      sendCommand('CMD_INIT', { text, index, settings: uiState.settings, tabUrl: pdfUrl });
+      sendCommand('INIT', { text, index, settings: uiState.settings, tabUrl: pdfUrl });
       updatePlayButtonState();
     } else {
       textContent.innerHTML = '<p class="placeholder-text">No text found in PDF.</p>';
@@ -232,7 +231,7 @@ function renderSentences() {
     }
     span.id = `sentence-${index}`;
     span.dataset.index = index;
-    span.onclick = () => sendCommand('CMD_JUMP', { index });
+    span.onclick = () => sendCommand('JUMP', { index });
     textContent.appendChild(span);
   });
 }
@@ -354,7 +353,7 @@ function saveSettings() {
 }
 
 function sendSettings() {
-  sendCommand('CMD_UPDATE_SETTINGS', { settings: uiState.settings });
+  sendCommand('UPDATE_SETTINGS', { settings: uiState.settings });
 }
 
 const debouncedSaveSettings = debounce(saveSettings, 300);
@@ -367,14 +366,13 @@ btnPlay.onclick = () => {
     setTimeout(() => textContent.classList.remove('shake'), 400);
     return;
   }
-  sendCommand('CMD_TOGGLE_PLAY');
-};
+  sendCommand('TOGGLE_PLAY');
 
-btnStop.onclick = () => sendCommand('CMD_STOP');
-btnNext.onclick = () => sendCommand('CMD_NEXT');
-btnPrev.onclick = () => sendCommand('CMD_PREV');
-if (btnNextPara) btnNextPara.onclick = () => sendCommand('CMD_NEXT_PARA');
-if (btnPrevPara) btnPrevPara.onclick = () => sendCommand('CMD_PREV_PARA');
+btnStop.onclick = () => sendCommand('STOP');
+btnNext.onclick = () => sendCommand('NEXT');
+btnPrev.onclick = () => sendCommand('PREV');
+if (btnNextPara) btnNextPara.onclick = () => sendCommand('NEXT_PARA');
+if (btnPrevPara) btnPrevPara.onclick = () => sendCommand('PREV_PARA');
 
 btnSettings.onclick = () => settingsPanel.classList.remove('hidden');
 btnCloseSettings.onclick = () => settingsPanel.classList.add('hidden');
@@ -383,40 +381,33 @@ rateRange.oninput = (e) => {
   uiState.settings.rate = parseFloat(e.target.value);
   rateValue.textContent = e.target.value + "x";
   debouncedSaveSettings();
-};
 
 rateRange.onchange = (e) => {
   saveSettings();
   sendSettings();
-};
 
 pitchRange.oninput = (e) => {
   uiState.settings.pitch = parseFloat(e.target.value);
   pitchValue.textContent = e.target.value;
   debouncedSaveSettings();
-};
 
 pitchRange.onchange = (e) => {
   saveSettings();
   sendSettings();
-};
 
 volumeRange.oninput = (e) => {
   uiState.settings.volume = parseFloat(e.target.value);
   volumeValue.textContent = e.target.value;
   debouncedSaveSettings();
-};
 
 volumeRange.onchange = (e) => {
   saveSettings();
   sendSettings();
-};
 
 voiceSelect.onchange = (e) => {
   uiState.settings.voiceName = e.target.value;
   saveSettings();
   sendSettings();
-};
 
 highlightModeSelect.onchange = (e) => {
   uiState.settings.highlightMode = e.target.value;
@@ -424,13 +415,11 @@ highlightModeSelect.onchange = (e) => {
   sendSettings();
   renderSentences();
   highlightCurrentSentence();
-};
 
 chkAutoScroll.onchange = (e) => {
   uiState.settings.autoScroll = e.target.checked;
   saveSettings();
   sendSettings();
-};
 
 btnTheme.onclick = () => {
   const themes = ['auto', 'light', 'dark'];
@@ -440,9 +429,8 @@ btnTheme.onclick = () => {
   applyTheme(next);
   saveSettings();
   sendSettings();
-};
 
-btnTestVoice.onclick = () => sendCommand('CMD_TEST');
+btnTestVoice.onclick = () => sendCommand('TEST');
 
 btnReset.onclick = async () => {
   uiState.settings = {
@@ -458,4 +446,3 @@ btnReset.onclick = async () => {
   await loadSettings();     // Reload UI from the freshly saved defaults
   applyTheme(uiState.settings.theme);
   sendSettings();
-};

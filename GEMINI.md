@@ -24,7 +24,7 @@ This project is a Chrome extension that provides Text-to-Speech (TTS) capabiliti
 
 ### Communication
 - Use `chrome.runtime.sendMessage` and `chrome.tabs.sendMessage` for inter-component communication.
-- Standardize message types: `PLAY`, `PAUSE`, `STOP`, `SKIP_FORWARD`, `SKIP_BACKWARD`, `UPDATE_STATUS`.
+- Standardize message types: `INIT`, `PLAY`, `PAUSE`, `STOP`, `TOGGLE_PLAY`, `NEXT`, `PREV`, `NEXT_PARA`, `PREV_PARA`, `JUMP`, `UPDATE_SETTINGS`, `TEST`, `GET_STATE`, `DETECT_LANG`, `UPDATE_UI`.
 
 ### State Management
 - `background.js` acts as the primary orchestrator.

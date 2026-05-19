@@ -68,7 +68,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     // Internal background commands
-    if (msg.type === 'CMD_ENSURE_OFFSCREEN') {
+    if (msg.type === 'ENSURE_OFFSCREEN') {
         ensureOffscreen()
             .then(() => sendResponse({ status: 'ok' }))
             .catch(err => sendResponse({ status: 'error', message: err.message }));
@@ -76,12 +76,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     // Forward player commands to offscreen
-    if (msg.type && msg.type.startsWith('CMD_')) {
+    if (msg.type && (msg.type === 'PLAY' || msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE' || msg.type === 'DETECT_LANG')) {
         if (msg._forwarded) return; // Prevent infinite recursion
 
         console.log("Background: Forwarding command to offscreen:", msg.type);
         ensureOffscreen().then(() => {
-            const expectsResponse = ['CMD_GET_STATE', 'CMD_DETECT_LANG'].includes(msg.type);
+            const expectsResponse = ['GET_STATE', 'DETECT_LANG', 'INIT'].includes(msg.type);
 
             if (expectsResponse) {
                 chrome.runtime.sendMessage({ ...msg, _forwarded: true }, (response) => {
@@ -97,7 +97,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 sendResponse({ status: 'ok' });
             }
 
-            if (msg.type === 'CMD_STOP') {
+            if (msg.type === 'STOP') {
                 // Give it a moment to send the STOP update to UI, then close
                 setTimeout(closeOffscreen, 500);
             }
@@ -114,10 +114,10 @@ chrome.commands.onCommand.addListener(async (command) => {
     try {
         await ensureOffscreen();
         const msgMap = {
-            'play_stop': 'CMD_TOGGLE_PLAY',
-            'pause_resume': 'CMD_PAUSE',
-            'forward': 'CMD_NEXT',
-            'rewind': 'CMD_PREV'
+            'play_stop': 'TOGGLE_PLAY',
+            'pause_resume': 'PAUSE',
+            'forward': 'NEXT',
+            'rewind': 'PREV'
         };
         if (msgMap[command]) {
             chrome.runtime.sendMessage({ type: msgMap[command], _forwarded: true });

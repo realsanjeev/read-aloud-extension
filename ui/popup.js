@@ -155,7 +155,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   // 1. Check if background already has a state (playback in progress)
-  chrome.runtime.sendMessage({ type: 'CMD_GET_STATE' }, async (response) => {
+  chrome.runtime.sendMessage({ type: 'GET_STATE' }, async (response) => {
     if (chrome.runtime.lastError) { /* Offscreen not running yet — normal on fresh start */ }
     const isDifferentTab = response && response.state && response.state.tabId && response.state.tabId !== currentTab.id;
     const wasPlaying = response && response.state && response.state.isPlaying;
@@ -178,7 +178,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             showResumePrompt(saved.index, text, currentTab.id, currentTab.url);
           } else {
             const autoPlay = isDifferentTab && wasPlaying;
-            sendCommand('CMD_INIT', { text, index: 0, settings: uiState.settings, tabId: currentTab.id, tabUrl: currentTab.url, autoPlay });
+            sendCommand('INIT', { text, index: 0, settings: uiState.settings, tabId: currentTab.id, tabUrl: currentTab.url, autoPlay });
           }
           if (uiState.settings.miniPlayer) updateMiniPlayer(true);
         } else {
@@ -264,7 +264,7 @@ function renderSentences() {
     }
     span.id = `sentence-${index}`;
     span.dataset.index = index;
-    span.onclick = () => sendCommand('CMD_JUMP', { index });
+    span.onclick = () => sendCommand('JUMP', { index });
     textContent.appendChild(span);
   });
 }
@@ -327,11 +327,11 @@ function showResumePrompt(savedIndex, text, tabId, tabUrl) {
   resumePrompt.classList.remove('hidden');
   btnResumeYes.onclick = () => {
     resumePrompt.classList.add('hidden');
-    sendCommand('CMD_INIT', { text, index: savedIndex, settings: uiState.settings, tabId, tabUrl });
+    sendCommand('INIT', { text, index: savedIndex, settings: uiState.settings, tabId, tabUrl });
   };
   btnResumeNo.onclick = () => {
     resumePrompt.classList.add('hidden');
-    sendCommand('CMD_INIT', { text, index: 0, settings: uiState.settings, tabId, tabUrl });
+    sendCommand('INIT', { text, index: 0, settings: uiState.settings, tabId, tabUrl });
   };
 }
 
@@ -490,7 +490,7 @@ function saveSettings() {
 }
 
 function sendSettings() {
-  sendCommand('CMD_UPDATE_SETTINGS', { settings: uiState.settings });
+  sendCommand('UPDATE_SETTINGS', { settings: uiState.settings });
 }
 
 const debouncedSaveSettings = debounce(saveSettings, 300);
@@ -503,17 +503,17 @@ btnPlay.onclick = () => {
     setTimeout(() => textContent.classList.remove('shake'), 400);
     return;
   }
-  sendCommand('CMD_TOGGLE_PLAY');
-};
+  sendCommand('TOGGLE_PLAY');
+  };
 
-btnStop.onclick = () => {
-  sendCommand('CMD_STOP');
-  updateMiniPlayer(false);
-};
-btnNext.onclick = () => sendCommand('CMD_NEXT');
-btnPrev.onclick = () => sendCommand('CMD_PREV');
-if (btnNextPara) btnNextPara.onclick = () => sendCommand('CMD_NEXT_PARA');
-if (btnPrevPara) btnPrevPara.onclick = () => sendCommand('CMD_PREV_PARA');
+  btnStop.onclick = () => {
+  sendCommand('STOP');
+  };
+
+  btnNext.onclick = () => sendCommand('NEXT');
+  btnPrev.onclick = () => sendCommand('PREV');
+  if (btnNextPara) btnNextPara.onclick = () => sendCommand('NEXT_PARA');
+  if (btnPrevPara) btnPrevPara.onclick = () => sendCommand('PREV_PARA');
 
 btnSettings.onclick = () => settingsPanel.classList.remove('hidden');
 btnCloseSettings.onclick = () => settingsPanel.classList.add('hidden');
@@ -590,7 +590,7 @@ btnTheme.onclick = () => {
   sendSettings();
 };
 
-btnTestVoice.onclick = () => sendCommand('CMD_TEST');
+btnTestVoice.onclick = () => sendCommand('TEST');
 
 btnReset.onclick = async () => {
   uiState.settings = {

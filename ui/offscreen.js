@@ -8,7 +8,7 @@ let playerState = {
     isPlaying: false,
     isPaused: false,
     tabId: null,
-    tabUrl: null,  // stored at CMD_INIT so savePosition() doesn't need chrome.tabs (unavailable in offscreen)
+    tabUrl: null,  // stored at INIT so savePosition() doesn't need chrome.tabs (unavailable in offscreen)
     settings: {
         voiceName: null,
         rate: 1.0,
@@ -24,70 +24,70 @@ let voiceRetryCount = 0;
 const MAX_VOICE_RETRIES = 20;
 let isSpeaking = false;
 
-// Settings are initialized via CMD_INIT and CMD_UPDATE_SETTINGS messages from the popup
+// Settings are initialized via INIT and UPDATE_SETTINGS messages from the popup
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // Ignore direct broadcasts from the popup; only accept commands proxied by the background service worker
-    if (msg.type && msg.type.startsWith('CMD_') && !msg._forwarded) {
+    if (msg.type && (msg.type === 'PLAY' || msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE' || msg.type === 'DETECT_LANG') && !msg._forwarded) {
         return;
     }
 
     switch (msg.type) {
-        case 'CMD_INIT':
-            console.log("Offscreen: CMD_INIT received, text length:", msg.text ? msg.text.length : 0);
+        case 'INIT':
+            console.log("Offscreen: INIT received, text length:", msg.text ? msg.text.length : 0);
             initPlayer(msg.text, msg.index || 0, msg.settings, msg.autoPlay || false, msg.tabId, msg.tabUrl || null);
             sendResponse({ status: 'ok' });
             break;
-        case 'CMD_PLAY':
+        case 'PLAY':
             play();
             sendResponse({ status: 'ok' });
             break;
-        case 'CMD_TOGGLE_PLAY':
+        case 'TOGGLE_PLAY':
             togglePlay();
             sendResponse({ status: 'ok' });
             break;
-        case 'CMD_PAUSE':
+        case 'PAUSE':
             togglePause();
             sendResponse({ status: 'ok' });
             break;
-        case 'CMD_STOP':
+        case 'STOP':
             stop();
             sendResponse({ status: 'ok' });
             break;
-        case 'CMD_NEXT':
+        case 'NEXT':
             next();
             sendResponse({ status: 'ok' });
             break;
-        case 'CMD_PREV':
+        case 'PREV':
             prev();
             sendResponse({ status: 'ok' });
             break;
-        case 'CMD_NEXT_PARA':
+        case 'NEXT_PARA':
             nextParagraph();
             sendResponse({ status: 'ok' });
             break;
-        case 'CMD_PREV_PARA':
+        case 'PREV_PARA':
             prevParagraph();
             sendResponse({ status: 'ok' });
             break;
-        case 'CMD_JUMP':
+        case 'JUMP':
             initPlayer(null, msg.index, null, true);
             sendResponse({ status: 'ok' });
             break;
-        case 'CMD_UPDATE_SETTINGS':
+        case 'UPDATE_SETTINGS':
             updateSettings(msg.settings);
             sendResponse({ status: 'ok' });
             break;
-        case 'CMD_TEST':
+        case 'TEST':
             testVoice();
             sendResponse({ status: 'ok' });
             break;
-        case 'CMD_DETECT_LANG':
+        case 'DETECT_LANG':
             detectLanguage(msg.text)
                 .then(lang => sendResponse({ lang }))
                 .catch(err => sendResponse({ error: err.message }));
             return true;
-        case 'CMD_GET_STATE':
+        case 'GET_STATE':
             sendUpdate(sendResponse);
             return true;
     }
@@ -296,7 +296,7 @@ function prev() {
     }
 }
 
-// Note: CMD_JUMP is handled via initPlayer(null, msg.index, null, true) in the message handler.
+// Note: JUMP is handled via initPlayer(null, msg.index, null, true) in the message handler.
 
 function nextParagraph() {
     if (playerState.lineBreaks.length === 0) {
@@ -456,7 +456,7 @@ function sendUpdate(sendResponse = null, extra = {}) {
         ...extra
     };
 
-    // If we're responding to CMD_GET_STATE or CMD_INIT, we MUST send sentences
+    // If we're responding to GET_STATE or INIT, we MUST send sentences
     if (sendResponse || extra.fullPayload) {
         state.sentences = playerState.sentences;
     }
