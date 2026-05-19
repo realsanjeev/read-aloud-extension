@@ -8,8 +8,10 @@ window.__readAloudContentScriptLoaded = true;
 
 console.log("[ReadAloud] Content script loaded.");
 
+let shadowHost = null;
+let shadowRoot = null;
 let miniPlayer = null;
-let miniPlayerVisible = false;
+let playerSentences = [];
 let currentSentenceText = "";
 
 /**
@@ -57,6 +59,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         } else {
             hideMiniPlayer();
         }
+        safeSendMessage({ type: 'GET_STATE' }, (response) => {
+            if (response && response.state) {
+                updateMiniPlayer(response.state);
+            }
+        });
         return;
     }
 });
@@ -101,14 +108,21 @@ function extractContentFromPage() {
 
 function ensureMiniPlayer() {
     if (miniPlayer) {
-        miniPlayer.classList.remove('hidden');
-        miniPlayerVisible = true;
+        miniPlayer.classList.remove('is-hidden');
         return;
     }
 
+    // 1. Create Shadow Host
+    shadowHost = document.createElement('div');
+    shadowHost.id = 'read-aloud-mini-player-host';
+    shadowHost.style.cssText = 'all: initial; position: fixed; bottom: 0; right: 0; z-index: 2147483647;';
+    
+    // 2. Attach Shadow Root
+    shadowRoot = shadowHost.attachShadow({ mode: 'open' });
+
+    // 3. Create Container inside Shadow DOM
     const container = document.createElement('div');
     container.className = 'read-aloud-mini-player';
-    container.id = 'readAloudMiniPlayer';
     container.setAttribute('role', 'region');
     container.setAttribute('aria-label', 'Read aloud mini player');
 
@@ -137,174 +151,187 @@ function ensureMiniPlayer() {
         <button class="mini-close" aria-label="Close mini player">&times;</button>
     `;
 
-    // Inject styles if not already present
-    if (!document.getElementById('readAloudMiniPlayerStyles')) {
-        const style = document.createElement('style');
-        style.id = 'readAloudMiniPlayerStyles';
-        style.textContent = `
+    // 4. Inject Isolated Styles
+    const style = document.createElement('style');
+    style.textContent = `
+        :host {
+            all: initial;
+            pointer-events: none;
+        }
+        .read-aloud-mini-player {
+            pointer-events: auto;
+            position: fixed;
+            bottom: 32px;
+            right: 32px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: rgba(30, 41, 59, 0.95);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 10px 16px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+            font-family: system-ui, -apple-system, sans-serif;
+            font-size: 14px;
+            color: #f1f5f9;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+            max-width: 320px;
+            line-height: 1.4;
+            box-sizing: border-box;
+            z-index: 2147483647;
+        }
+        .read-aloud-mini-player * {
+            box-sizing: border-box;
+        }
+        .read-aloud-mini-player.is-hidden {
+            transform: translateY(30px) scale(0.95);
+            opacity: 0;
+            pointer-events: none;
+        }
+        .read-aloud-mini-player .mini-sentence {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-weight: 500;
+            max-width: 140px;
+            color: #f1f5f9;
+        }
+        .read-aloud-mini-player .mini-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #10b981;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 6px;
+            border-radius: 10px;
+            transition: all 0.2s;
+            opacity: 0.9;
+        }
+        .read-aloud-mini-player .mini-btn:hover:not(:disabled) {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            transform: translateY(-1px);
+            opacity: 1;
+        }
+        .read-aloud-mini-player .mini-btn:disabled {
+            color: #64748b;
+            cursor: not-allowed;
+            opacity: 0.4;
+        }
+        .read-aloud-mini-player .mini-btn.active {
+            color: #34d399;
+            filter: drop-shadow(0 0 4px rgba(16, 185, 129, 0.4));
+        }
+        .read-aloud-mini-player .mini-close {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #475569;
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+            line-height: 1;
+            text-align: center;
+            cursor: pointer;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            transition: all 0.2s;
+        }
+        .read-aloud-mini-player .mini-close:hover {
+            background: #ef4444;
+            transform: scale(1.1);
+        }
+        .read-aloud-mini-player .hidden {
+            display: none !important;
+        }
+        @media (prefers-reduced-motion: reduce) {
             .read-aloud-mini-player {
-                position: fixed;
-                bottom: 32px;
-                right: 32px;
-                z-index: 2147483647;
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                background: rgba(30, 41, 59, 0.95);
-                backdrop-filter: blur(16px);
-                -webkit-backdrop-filter: blur(16px);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 20px;
-                padding: 10px 16px;
-                box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
-                font-family: system-ui, -apple-system, sans-serif;
-                font-size: 0.85rem;
-                color: #f1f5f9;
-                transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
-                max-width: 320px;
-                line-height: 1.4;
+                transition: none;
             }
-            .read-aloud-mini-player.hidden {
-                transform: translateY(30px) scale(0.95);
-                opacity: 0;
-                pointer-events: none;
-            }
-            .read-aloud-mini-player .mini-sentence {
-                flex: 1;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                font-weight: 500;
-                max-width: 140px;
-                color: #f1f5f9;
-            }
-            .read-aloud-mini-player .mini-btn {
-                background: none;
-                border: none;
-                cursor: pointer;
-                color: #10b981;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 6px;
-                border-radius: 10px;
-                transition: all 0.2s;
-                opacity: 0.9;
-            }
-            .read-aloud-mini-player .mini-btn:hover:not(:disabled) {
-                background: rgba(16, 185, 129, 0.15);
-                color: #34d399;
-                transform: translateY(-1px);
-                opacity: 1;
-            }
-            .read-aloud-mini-player .mini-btn:disabled {
-                color: #64748b;
-                cursor: not-allowed;
-                opacity: 0.4;
-            }
-            .read-aloud-mini-player .mini-btn.active {
-                color: #34d399;
-                filter: drop-shadow(0 0 4px rgba(16, 185, 129, 0.4));
-            }
-            .read-aloud-mini-player .mini-close {
-                position: absolute;
-                top: -6px;
-                right: -6px;
-                width: 24px;
-                height: 24px;
-                border-radius: 50%;
-                background: #475569;
-                color: white;
-                font-size: 16px;
-                font-weight: bold;
-                line-height: 1;
-                text-align: center;
-                cursor: pointer;
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 0;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-                transition: all 0.2s;
-            }
-            .read-aloud-mini-player .mini-close:hover {
-                background: #ef4444;
-                transform: scale(1.1);
-            }
-            .read-aloud-mini-player .hidden {
-                display: none;
-            }
-            @media (prefers-reduced-motion: reduce) {
-                .read-aloud-mini-player {
-                    transition: none;
-                }
-            }
-        `;
-        document.head.appendChild(style);
-    }
+        }
+    `;
 
-    document.body.appendChild(container);
+    shadowRoot.appendChild(style);
+    shadowRoot.appendChild(container);
+    document.body.appendChild(shadowHost);
+    
     miniPlayer = container;
-    miniPlayerVisible = true;
 
-    // Request current state now that miniPlayer is in the DOM,
-    // so re-entrancy via updateMiniPlayer → ensureMiniPlayer is safe.
+    // Request current state
     safeSendMessage({ type: 'GET_STATE' }, (response) => {
         if (response && response.state) {
             updateMiniPlayer(response.state);
         }
     });
 
-    // Event listeners
-    container.querySelector('.mini-toggle').addEventListener('click', () => {
+    // Event listeners inside Shadow Root
+    container.querySelector('.mini-toggle').addEventListener('click', (e) => {
+        e.stopPropagation();
         safeSendMessage({ type: 'TOGGLE_PLAY' });
     });
-    container.querySelector('.mini-next').addEventListener('click', () => {
+    container.querySelector('.mini-next').addEventListener('click', (e) => {
+        e.stopPropagation();
         safeSendMessage({ type: 'NEXT' });
     });
-    container.querySelector('.mini-stop').addEventListener('click', () => {
+    container.querySelector('.mini-stop').addEventListener('click', (e) => {
+        e.stopPropagation();
         safeSendMessage({ type: 'STOP' });
         hideMiniPlayer();
     });
-    container.querySelector('.mini-close').addEventListener('click', () => {
+    container.querySelector('.mini-close').addEventListener('click', (e) => {
+        e.stopPropagation();
         hideMiniPlayer();
     });
 }
 
 function hideMiniPlayer() {
-    if (miniPlayer) {
-        miniPlayer.classList.add('hidden');
-        miniPlayerVisible = false;
+    if (miniPlayer && !miniPlayer.classList.contains('is-hidden')) {
+        miniPlayer.classList.add('is-hidden');
     }
 }
 
 function updateMiniPlayer(state) {
     if (!state) return;
 
-    const isPlaying = state.isPlaying && !state.isPaused;
-    const hasContent = state.sentences && state.sentences.length > 0;
+    if (state.sentences && state.sentences.length > 0) {
+        playerSentences = state.sentences;
+    }
 
-    if (!hasContent) {
+    const isPlaying = state.isPlaying && !state.isPaused;
+    const isPaused = !state.isPlaying && state.isPaused;
+    const isActive = isPlaying || isPaused;
+    const hasContent = playerSentences.length > 0;
+
+    if (!isActive || !hasContent) {
         hideMiniPlayer();
         return;
     }
 
-    // Show mini-player when playing or paused with content
     ensureMiniPlayer();
 
-    const sentence = state.sentences[state.currentIndex] || '';
+    const sentence = playerSentences[state.currentIndex] || '';
     const sentenceEl = miniPlayer.querySelector('.mini-sentence');
     if (sentenceEl && sentence !== currentSentenceText) {
         sentenceEl.textContent = sentence;
         currentSentenceText = sentence;
     }
 
-    // Toggle play/pause icon and active state
     const toggleBtn = miniPlayer.querySelector('.mini-toggle');
     const playIcon = miniPlayer.querySelector('.mini-icon-play');
     const pauseIcon = miniPlayer.querySelector('.mini-icon-pause');
-    
+
     if (isPlaying) {
         playIcon.classList.add('hidden');
         pauseIcon.classList.remove('hidden');
@@ -315,10 +342,9 @@ function updateMiniPlayer(state) {
         toggleBtn.classList.remove('active');
     }
 
-    // Handle next button disabled state
     const nextBtn = miniPlayer.querySelector('.mini-next');
     if (nextBtn) {
-        nextBtn.disabled = state.currentIndex >= (state.totalSentences - 1);
+        nextBtn.disabled = state.currentIndex >= (playerSentences.length - 1);
     }
 }
 
