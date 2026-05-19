@@ -248,10 +248,10 @@ function play() {
 }
 
 function pause() {
+    savePosition();
     playerState.isPlaying = false;
     playerState.isPaused = true;
     window.speechSynthesis.cancel();
-    savePosition();
     sendUpdate();
 }
 
@@ -272,11 +272,11 @@ function togglePause() {
 }
 
 function stop() {
+    savePosition();
     playerState.isPlaying = false;
     playerState.isPaused = false;
     playerState.currentIndex = 0;
     window.speechSynthesis.cancel();
-    savePosition();
     sendUpdate();
 }
 
