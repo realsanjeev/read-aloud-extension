@@ -98,8 +98,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             }
 
             if (msg.type === 'STOP') {
-                // Give it a moment to send the STOP update to UI, then close
-                setTimeout(closeOffscreen, 500);
+                // Wait for STOP_COMPLETE from offscreen (savePosition done),
+                // with a safety timeout so we never leave the doc open forever.
+                const safetyTimeout = setTimeout(closeOffscreen, 5000);
+                const onComplete = (completeMsg) => {
+                    if (completeMsg && completeMsg.type === 'STOP_COMPLETE') {
+                        chrome.runtime.onMessage.removeListener(onComplete);
+                        clearTimeout(safetyTimeout);
+                        closeOffscreen();
+                    }
+                };
+                chrome.runtime.onMessage.addListener(onComplete);
             }
         }).catch(err => {
             console.error("Background: Failed to ensure offscreen:", err);

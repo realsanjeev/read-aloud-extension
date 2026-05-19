@@ -71,6 +71,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             sendResponse({ status: 'ok' });
             break;
         case 'JUMP':
+            if (playerState.sentences.length === 0) {
+                console.warn("Offscreen: JUMP ignored — no sentences loaded.");
+                sendResponse({ status: 'ok' });
+                break;
+            }
             initPlayer(null, msg.index, null, true);
             sendResponse({ status: 'ok' });
             break;
@@ -281,13 +286,19 @@ function togglePause() {
     }
 }
 
-function stop() {
-    savePosition();
+async function stop() {
+    await savePosition();
     playerState.isPlaying = false;
     playerState.isPaused = false;
     playerState.currentIndex = 0;
     window.speechSynthesis.cancel();
     sendUpdate();
+    // Signal background that state is fully persisted and it's safe to close
+    chrome.runtime.sendMessage({ type: 'STOP_COMPLETE' }, () => {
+        if (chrome.runtime.lastError) {
+            console.debug("Offscreen: STOP_COMPLETE had no receivers:", chrome.runtime.lastError.message);
+        }
+    });
 }
 
 function next() {
@@ -484,16 +495,23 @@ function sendUpdate(sendResponse = null, extra = {}) {
 
 
 function savePosition() {
-    if (!playerState.tabUrl || playerState.sentences.length === 0) return;
+    if (!playerState.tabUrl || playerState.sentences.length === 0) return Promise.resolve();
     // Guard against extension context being torn down during auto-persist
-    if (!chrome.storage) return;
+    if (!chrome.storage) return Promise.resolve();
     const key = 'pos_' + hashStr(playerState.tabUrl);
-    chrome.storage.local.set({
-        [key]: {
-            url: playerState.tabUrl,
-            index: playerState.currentIndex,
-            timestamp: Date.now()
-        }
+    return new Promise((resolve) => {
+        chrome.storage.local.set({
+            [key]: {
+                url: playerState.tabUrl,
+                index: playerState.currentIndex,
+                timestamp: Date.now()
+            }
+        }, () => {
+            if (chrome.runtime.lastError) {
+                console.warn("Offscreen: savePosition failed:", chrome.runtime.lastError.message);
+            }
+            resolve();
+        });
     });
 }
 
