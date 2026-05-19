@@ -485,7 +485,8 @@ function sendUpdate(sendResponse = null, extra = {}) {
 
 function savePosition() {
     if (!playerState.tabUrl || playerState.sentences.length === 0) return;
-    // offscreen documents HAVE access to chrome.storage
+    // Guard against extension context being torn down during auto-persist
+    if (!chrome.storage) return;
     const key = 'pos_' + hashStr(playerState.tabUrl);
     chrome.storage.local.set({
         [key]: {
