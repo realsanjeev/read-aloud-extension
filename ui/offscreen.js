@@ -475,17 +475,15 @@ function sendUpdate(sendResponse = null, extra = {}) {
 
 function savePosition() {
     if (!playerState.tabUrl || playerState.sentences.length === 0) return;
-    // chrome.storage is unavailable in offscreen documents — proxy through background
+    // offscreen documents HAVE access to chrome.storage
     const key = 'pos_' + hashStr(playerState.tabUrl);
-    chrome.runtime.sendMessage({
-        type: 'SAVE_POSITION',
-        key,
-        data: {
+    chrome.storage.local.set({
+        [key]: {
             url: playerState.tabUrl,
             index: playerState.currentIndex,
             timestamp: Date.now()
         }
-    }, () => { if (chrome.runtime.lastError) {} }); // suppress "no handler" warning
+    });
 }
 
 let testVoiceRetryCount = 0;

@@ -75,12 +75,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
     }
 
-    // Storage proxy for offscreen document (chrome.storage unavailable there)
-    if (msg.type === 'SAVE_POSITION') {
-        chrome.storage.local.set({ [msg.key]: msg.data });
-        return;
-    }
-
     // Forward player commands to offscreen
     if (msg.type && msg.type.startsWith('CMD_')) {
         if (msg._forwarded) return; // Prevent infinite recursion
