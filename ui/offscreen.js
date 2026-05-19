@@ -587,8 +587,13 @@ function detectLanguage(text) {
 }
 
 // Auto-persist position periodically while playing
-setInterval(() => {
+const autoPersistIntervalId = setInterval(() => {
     if (playerState.isPlaying && !playerState.isPaused) {
         savePosition();
     }
 }, 5000);
+
+// Clean up the interval when the offscreen document is being closed
+window.addEventListener('beforeunload', () => {
+    clearInterval(autoPersistIntervalId);
+});
