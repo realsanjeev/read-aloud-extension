@@ -140,40 +140,50 @@ function tokenizeSentences(text) {
         while (i < trimmedLine.length) {
             current += trimmedLine[i];
 
-            if (trimmedLine[i] === '.' || trimmedLine[i] === '!' || trimmedLine[i] === '?') {
-                // Check if this is an ellipsis (...)
-                if (trimmedLine.substring(i, i + 3) === '...') {
+            if (trimmedLine[i] === '.' || trimmedLine[i] === '!' || trimmedLine[i] === '?' ||
+                trimmedLine[i] === '\u3002' || trimmedLine[i] === '\uFF01' || trimmedLine[i] === '\uFF1F') {
+                const ch = trimmedLine[i];
+                const isCJKPunct = ch === '\u3002' || ch === '\uFF01' || ch === '\uFF1F';
+
+                // Check if this is an ellipsis (ASCII only)
+                if (!isCJKPunct && trimmedLine.substring(i, i + 3) === '...') {
                     current += trimmedLine[i + 1] || '';
                     current += trimmedLine[i + 2] || '';
                     i += 2;
                 }
                 // Check if next char is a quote
                 const nextChar = trimmedLine[i + 1];
-                if (nextChar === '"' || nextChar === "'") {
+                if (nextChar === '"' || nextChar === "'" || nextChar === '\u201C' || nextChar === '\u2018' || nextChar === '\u201D' || nextChar === '\u2019') {
                     current += nextChar;
                     i++;
                 }
 
-                // Look back to see if this period is part of an abbreviation or number
-                const beforePeriod = current.slice(0, -1).trim();
-                const lastWordMatch = beforePeriod.match(/([a-zA-Z0-9]+)[.!?]?$/);
-                const lastWord = lastWordMatch ? lastWordMatch[1].toLowerCase() : '';
-
-                // Check if it's a decimal number (e.g., 3.14)
-                const isDecimal = /\d+\.\d+$/.test(beforePeriod);
-
-                // Check if it's an abbreviation
-                const isAbbrev = abbreviations.has(lastWord) || abbreviations.has(lastWord + '.');
-
-                // Check if there's more text and it looks like a sentence continuation (lowercase next word)
-                const remainder = trimmedLine.substring(i + 1).trim();
-                const nextWord = remainder.match(/^([a-zA-Z0-9]+)/);
-                const startsWithLowercase = nextWord && /^[a-z]/.test(nextWord[1]);
-
-                // Decision: split here unless it's a decimal, abbreviation, or starts with lowercase
-                if (!isDecimal && !isAbbrev && (!startsWithLowercase || trimmedLine[i] !== '.')) {
+                // For CJK punctuation, split cleanly (no abbreviations, decimals, or lowercase continuation)
+                if (isCJKPunct) {
                     result.push(current.trim());
                     current = '';
+                } else {
+                    // Look back to see if this period is part of an abbreviation or number
+                    const beforePeriod = current.slice(0, -1).trim();
+                    const lastWordMatch = beforePeriod.match(/([a-zA-Z0-9]+)[.!?]?$/);
+                    const lastWord = lastWordMatch ? lastWordMatch[1].toLowerCase() : '';
+
+                    // Check if it's a decimal number (e.g., 3.14)
+                    const isDecimal = /\d+\.\d+$/.test(beforePeriod);
+
+                    // Check if it's an abbreviation
+                    const isAbbrev = abbreviations.has(lastWord) || abbreviations.has(lastWord + '.');
+
+                    // Check if there's more text and it looks like a sentence continuation (lowercase next word)
+                    const remainder = trimmedLine.substring(i + 1).trim();
+                    const nextWord = remainder.match(/^([a-zA-Z0-9]+)/);
+                    const startsWithLowercase = nextWord && /^[a-z]/.test(nextWord[1]);
+
+                    // Decision: split here unless it's a decimal, abbreviation, or starts with lowercase
+                    if (!isDecimal && !isAbbrev && (!startsWithLowercase || ch !== '.')) {
+                        result.push(current.trim());
+                        current = '';
+                    }
                 }
             }
 

@@ -92,7 +92,11 @@ function extractContentFromPage() {
     }
     
     // 3. Fallback to basic innerText but try to be smart about common content areas
-    const contentAreas = ['article', 'main', '.content', '.post', '#content', '#main'];
+    const contentAreas = [
+        'article', 'main', '.content', '.post', '#content', '#main',
+        '.txtnav', '.mybox', '.container',
+        '.chapter-content', '#chaptercontent', '.read-content', '.book-content'
+    ];
     for (const selector of contentAreas) {
         const el = document.querySelector(selector);
         if (el) {
