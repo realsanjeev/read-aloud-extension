@@ -103,15 +103,41 @@ async function extractPdfText(url) {
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const pageContent = await page.getTextContent();
-    let lastY = -1;
-    let pageText = "";
+    const items = pageContent.items;
 
-    for (const item of pageContent.items) {
-      if (lastY !== item.transform[5] && pageText.length > 0) {
-        pageText += "\n";
+    if (items.length === 0) continue;
+
+    // Sort items: Top to Bottom (Y descending), then Left to Right (X ascending)
+    // pdf.js Y-coordinates usually start from the bottom.
+    // transform[5] is Y, transform[4] is X.
+    items.sort((a, b) => {
+      const yDiff = b.transform[5] - a.transform[5];
+      if (Math.abs(yDiff) > 5) return yDiff; // Use 5pt tolerance for "same line"
+      return a.transform[4] - b.transform[4];
+    });
+
+    let pageText = "";
+    let lastItem = null;
+
+    for (const item of items) {
+      if (!item.str.trim()) continue;
+
+      if (lastItem) {
+        const yDiff = Math.abs(item.transform[5] - lastItem.transform[5]);
+        const xDiff = item.transform[4] - (lastItem.transform[4] + lastItem.width);
+        
+        // Determine spacing based on vertical and horizontal gaps
+        if (yDiff > 5) {
+          // Significant vertical jump - likely a new line or paragraph
+          pageText += (yDiff > 15) ? "\n\n" : "\n";
+        } else if (xDiff > item.height * 0.5) {
+          // Horizontal gap - likely a space or column jump
+          pageText += " ";
+        }
       }
+
       pageText += item.str;
-      lastY = item.transform[5];
+      lastItem = item;
     }
 
     if (pageNum > 1) fullText += "\n\n";
