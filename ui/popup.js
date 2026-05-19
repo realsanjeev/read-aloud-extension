@@ -1,5 +1,6 @@
 // popup.js - UI Controller for Speak Aloud Extension
 import { hashStr, debounce, getSavedPosition } from './utils.js';
+import * as shared from './ui-shared.js';
 
 // --- DOM Elements ---
 const btnPlay = document.getElementById('btnPlay');
@@ -37,40 +38,15 @@ const chkMiniPlayer = document.getElementById('chkMiniPlayer');
 const resumePrompt = document.getElementById('resumePrompt');
 
 // --- Global State ---
-let uiState = {
-  sentences: [],
-  lineBreaks: [],
-  currentIndex: 0,
-  isPlaying: false,
-  isPaused: false,
-  settings: {
-    voiceName: null,
-    rate: 1.0,
-    pitch: 1.0,
-    volume: 1.0,
-    highlightMode: 'sentence',
-    autoScroll: true,
-    theme: 'auto',
-    miniPlayer: true
-  }
-};
+let uiState = shared.createBaseState();
+uiState.settings.miniPlayer = true; // Popup specific default
 
 let voices = [];
 let contentReady = false;
-let voiceRetryCount = 0;
-const MAX_VOICE_RETRIES = 20;
+let voiceRetryRef = { count: 0 };
 const scriptInjectedTabs = new Set();
 
-
-function isElementInViewport(el) {
-  const rect = el.getBoundingClientRect();
-  const parent = textContent;
-  const parentRect = parent.getBoundingClientRect();
-  return (
-    rect.top >= parentRect.top &&
-    rect.bottom <= parentRect.bottom
-  );
-}
+// --- Utilities ---
 
 function setControlsEnabled(enabled) {
   btnPlay.disabled = !enabled;
@@ -84,21 +60,6 @@ function setControlsEnabled(enabled) {
 function updatePlayButtonState() {
   const hasContent = uiState.sentences.length > 0;
   setControlsEnabled(hasContent);
-}
-
-// --- Theme ---
-function applyTheme(theme) {
-  const root = document.documentElement;
-  if (theme === 'dark') {
-    root.setAttribute('data-theme', 'dark');
-    iconTheme.innerHTML = `<circle cx="12" cy="12" r="5"></circle><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path>`;
-  } else if (theme === 'light') {
-    root.setAttribute('data-theme', 'light');
-    iconTheme.innerHTML = `<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>`;
-  } else {
-    root.setAttribute('data-theme', 'auto');
-    iconTheme.innerHTML = `<circle cx="12" cy="12" r="5"></circle><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path>`;
-  }
 }
 
 // --- Voice Auto-Selection ---
@@ -148,15 +109,18 @@ async function updateMiniPlayer(show) {
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', async () => {
   setControlsEnabled(false);
-  await loadSettings();
-  applyTheme(uiState.settings.theme);
-  setupVoiceSelection();
+  await shared.loadSharedSettings(uiState, {
+    rateRange, rateValue, pitchRange, pitchValue, volumeRange, volumeValue,
+    highlightModeSelect, chkAutoScroll, chkMiniPlayer
+  });
+  shared.applyTheme(uiState.settings.theme, iconTheme);
+  voices = shared.setupVoiceSelection(uiState, { voiceSelect, voiceError }, voiceRetryRef);
 
   const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   // 1. Check if background already has a state (playback in progress)
   chrome.runtime.sendMessage({ type: 'GET_STATE' }, async (response) => {
-    if (chrome.runtime.lastError) { /* Offscreen not running yet — normal on fresh start */ }
+    if (chrome.runtime.lastError) { /* Offscreen not running yet */ }
     const isDifferentTab = response && response.state && response.state.tabId && response.state.tabId !== currentTab.id;
     const wasPlaying = response && response.state && response.state.isPlaying;
 
@@ -196,7 +160,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'UPDATE_UI') {
-    console.log("Popup: Received UPDATE_UI, sentences:", msg.state.sentences ? msg.state.sentences.length : '(optimized)');
     handleUpdateUI(msg.state);
     return false;
   }
@@ -208,65 +171,20 @@ function sendCommand(type, payload = {}) {
 }
 
 function handleUpdateUI(state) {
-  // If sentences are missing (optimized payload), don't overwrite our current list
-  const hasSentences = state.sentences && state.sentences.length > 0;
-  const needsRerender = hasSentences && (
-    uiState.sentences.length !== state.sentences.length ||
-    uiState.sentences[0] !== state.sentences[0]
-  );
-  
-  if (hasSentences) {
-    uiState.sentences = state.sentences;
-  }
-  
-  // Update other properties
-  const { sentences, ...rest } = state;
-  uiState = { ...uiState, ...rest };
-
-  if (needsRerender) {
-    renderSentences();
-  }
-
-  if (state.wordBoundary) {
-    highlightWord(state.wordBoundary);
-  } else {
-    highlightCurrentSentence();
-  }
-
-  togglePlayIcon(uiState.isPlaying && !uiState.isPaused);
-  updateProgress();
-  updatePlayButtonState();
+  shared.handleUpdateUI(uiState, state, {
+    renderSentences,
+    highlightWord,
+    highlightCurrentSentence,
+    togglePlayIcon: (active) => shared.togglePlayIcon(active, iconPlay, iconPause),
+    updateProgress: () => shared.updateProgress(uiState, progressBar),
+    updatePlayButtonState
+  });
 }
 
 // --- UI Rendering ---
 
 function renderSentences() {
-  textContent.innerHTML = "";
-  uiState.sentences.forEach((sentence, index) => {
-    if (uiState.lineBreaks && uiState.lineBreaks.includes(index)) {
-      textContent.appendChild(document.createElement('br'));
-      textContent.appendChild(document.createElement('br'));
-    }
-
-    const span = document.createElement('span');
-    if (uiState.settings.highlightMode === 'word') {
-      const words = sentence.split(/(\s+)/);
-      words.forEach((word, widx) => {
-        const wspan = document.createElement('span');
-        wspan.textContent = word;
-        wspan.className = 'word';
-        wspan.dataset.sentenceIndex = index;
-        wspan.dataset.wordIndex = widx;
-        span.appendChild(wspan);
-      });
-    } else {
-      span.textContent = sentence + " ";
-    }
-    span.id = `sentence-${index}`;
-    span.dataset.index = index;
-    span.onclick = () => sendCommand('JUMP', { index });
-    textContent.appendChild(span);
-  });
+  shared.renderSentences(uiState, textContent, (index) => sendCommand('JUMP', { index }));
 }
 
 function highlightCurrentSentence() {
@@ -275,7 +193,7 @@ function highlightCurrentSentence() {
   const el = document.getElementById(`sentence-${uiState.currentIndex}`);
   if (el) {
     el.classList.add('highlight');
-    if (uiState.settings.autoScroll && !isElementInViewport(el)) {
+    if (uiState.settings.autoScroll && !shared.isElementInViewport(el, textContent)) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }
@@ -294,7 +212,7 @@ function highlightWord(boundary) {
     const wordLen = wspan.textContent.length;
     if (charCount + wordLen > boundary.charIndex) {
       wspan.classList.add('word-highlight');
-      if (uiState.settings.autoScroll && !isElementInViewport(wspan)) {
+      if (uiState.settings.autoScroll && !shared.isElementInViewport(wspan, textContent)) {
         wspan.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
       break;
@@ -303,25 +221,7 @@ function highlightWord(boundary) {
   }
 }
 
-function updateProgress() {
-  if (!uiState.sentences || uiState.sentences.length === 0) return;
-  const progress = ((uiState.currentIndex + 1) / uiState.sentences.length) * 100;
-  progressBar.style.width = `${Math.min(progress, 100)}%`;
-}
-
-function togglePlayIcon(active) {
-  if (active) {
-    iconPlay.classList.add('hidden');
-    iconPause.classList.remove('hidden');
-  } else {
-    iconPlay.classList.remove('hidden');
-    iconPause.classList.add('hidden');
-  }
-}
-
 // --- Resume Position ---
-
-
 
 function showResumePrompt(savedIndex, text, tabId, tabUrl) {
   resumePrompt.classList.remove('hidden');
@@ -427,64 +327,6 @@ async function injectContentScripts(tabId) {
 
 // --- Settings & Voices ---
 
-async function loadSettings() {
-  const data = await chrome.storage.sync.get([
-    'voiceName', 'rate', 'pitch', 'volume', 'highlightMode', 'autoScroll', 'theme', 'miniPlayer'
-  ]);
-  uiState.settings = {
-    voiceName: data.voiceName || null,
-    rate: parseFloat(data.rate) || 1.0,
-    pitch: parseFloat(data.pitch) || 1.0,
-    volume: parseFloat(data.volume) || 1.0,
-    highlightMode: data.highlightMode || 'sentence',
-    autoScroll: data.autoScroll !== undefined ? data.autoScroll : true,
-    theme: data.theme || 'auto',
-    miniPlayer: data.miniPlayer !== undefined ? data.miniPlayer : true
-  };
-
-  rateRange.value = uiState.settings.rate;
-  rateValue.textContent = uiState.settings.rate + "x";
-  pitchRange.value = uiState.settings.pitch;
-  pitchValue.textContent = uiState.settings.pitch;
-  volumeRange.value = uiState.settings.volume;
-  volumeValue.textContent = uiState.settings.volume;
-  highlightModeSelect.value = uiState.settings.highlightMode;
-  chkAutoScroll.checked = uiState.settings.autoScroll;
-  if (chkMiniPlayer) chkMiniPlayer.checked = uiState.settings.miniPlayer;
-}
-
-function setupVoiceSelection() {
-  const updateVoices = () => {
-    voices = window.speechSynthesis.getVoices();
-    if (voices.length === 0) {
-      if (voiceRetryCount < MAX_VOICE_RETRIES) {
-        voiceRetryCount++;
-        setTimeout(updateVoices, 200);
-      } else {
-        voiceError.classList.remove('hidden');
-        voiceSelect.innerHTML = '<option value="">No voices available</option>';
-      }
-      return;
-    }
-    voiceError.classList.add('hidden');
-    voiceSelect.innerHTML = '';
-    voices.forEach(v => {
-      const opt = document.createElement('option');
-      opt.value = v.name;
-      opt.textContent = `${v.name} (${v.lang})`;
-      voiceSelect.appendChild(opt);
-    });
-    if (uiState.settings.voiceName) {
-      voiceSelect.value = uiState.settings.voiceName;
-    }
-  };
-
-  if (speechSynthesis.onvoiceschanged !== undefined) {
-    speechSynthesis.onvoiceschanged = updateVoices;
-  }
-  updateVoices();
-}
-
 function saveSettings() {
   chrome.storage.sync.set(uiState.settings);
 }
@@ -504,16 +346,16 @@ btnPlay.onclick = () => {
     return;
   }
   sendCommand('TOGGLE_PLAY');
-  };
+};
 
-  btnStop.onclick = () => {
+btnStop.onclick = () => {
   sendCommand('STOP');
-  };
+};
 
-  btnNext.onclick = () => sendCommand('NEXT');
-  btnPrev.onclick = () => sendCommand('PREV');
-  if (btnNextPara) btnNextPara.onclick = () => sendCommand('NEXT_PARA');
-  if (btnPrevPara) btnPrevPara.onclick = () => sendCommand('PREV_PARA');
+btnNext.onclick = () => sendCommand('NEXT');
+btnPrev.onclick = () => sendCommand('PREV');
+if (btnNextPara) btnNextPara.onclick = () => sendCommand('NEXT_PARA');
+if (btnPrevPara) btnPrevPara.onclick = () => sendCommand('PREV_PARA');
 
 btnSettings.onclick = () => settingsPanel.classList.remove('hidden');
 btnCloseSettings.onclick = () => settingsPanel.classList.add('hidden');
@@ -585,7 +427,7 @@ btnTheme.onclick = () => {
   const current = uiState.settings.theme || 'auto';
   const next = themes[(themes.indexOf(current) + 1) % themes.length];
   uiState.settings.theme = next;
-  applyTheme(next);
+  shared.applyTheme(next, iconTheme);
   saveSettings();
   sendSettings();
 };
@@ -603,8 +445,11 @@ btnReset.onclick = async () => {
     theme: 'auto',
     miniPlayer: true
   };
-  await saveSettings();     // Persist defaults to storage first
-  await loadSettings();     // Reload UI from the freshly saved defaults
-  applyTheme(uiState.settings.theme);
+  await saveSettings();
+  await shared.loadSharedSettings(uiState, {
+    rateRange, rateValue, pitchRange, pitchValue, volumeRange, volumeValue,
+    highlightModeSelect, chkAutoScroll, chkMiniPlayer
+  });
+  shared.applyTheme(uiState.settings.theme, iconTheme);
   sendSettings();
 };
