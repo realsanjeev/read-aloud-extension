@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Read Aloud Extension",
-  "version": "1.2",
+  "version": "1.0.1",
   "minimum_chrome_version": "109",
   "description": "A Text-to-Speech extension that reads web pages aloud.",
   "permissions": [

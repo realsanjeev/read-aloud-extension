@@ -181,3 +181,250 @@ export function togglePlayIcon(active, iconPlay, iconPause) {
     iconPause.classList.add('hidden');
   }
 }
+
+// --- Shared controller functions (eliminates popup/pdf-viewer duplication) ---
+
+/**
+ * Enable or disable all player control buttons.
+ */
+export function setControlsEnabled(elements, enabled) {
+  if (elements.btnPlay) elements.btnPlay.disabled = !enabled;
+  if (elements.btnStop) elements.btnStop.disabled = !enabled;
+  if (elements.btnPrev) elements.btnPrev.disabled = !enabled;
+  if (elements.btnNext) elements.btnNext.disabled = !enabled;
+  if (elements.btnPrevPara) elements.btnPrevPara.disabled = !enabled;
+  if (elements.btnNextPara) elements.btnNextPara.disabled = !enabled;
+}
+
+/**
+ * Highlight the current sentence in the text area and optionally auto-scroll.
+ */
+export function highlightCurrentSentence(uiState, textContent) {
+  document.querySelectorAll('.highlight').forEach(el => el.classList.remove('highlight'));
+  document.querySelectorAll('.word-highlight').forEach(el => el.classList.remove('word-highlight'));
+  const el = document.getElementById(`sentence-${uiState.currentIndex}`);
+  if (el) {
+    el.classList.add('highlight');
+    if (uiState.settings.autoScroll && !isElementInViewport(el, textContent)) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+}
+
+/**
+ * Highlight a specific word within a sentence (word-level highlight mode).
+ */
+export function highlightWord(uiState, textContent, boundary) {
+  document.querySelectorAll('.word-highlight').forEach(el => el.classList.remove('word-highlight'));
+  const sentenceEl = document.getElementById(`sentence-${boundary.sentenceIndex}`);
+  if (!sentenceEl) return;
+
+  sentenceEl.classList.add('highlight');
+
+  let charCount = 0;
+  const words = sentenceEl.querySelectorAll('.word');
+  for (const wspan of words) {
+    const wordLen = wspan.textContent.length;
+    if (charCount + wordLen > boundary.charIndex) {
+      wspan.classList.add('word-highlight');
+      if (uiState.settings.autoScroll && !isElementInViewport(wspan, textContent)) {
+        wspan.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      break;
+    }
+    charCount += wordLen;
+  }
+}
+
+/**
+ * Send a command message to the background service worker.
+ */
+export function sendCommand(type, payload = {}) {
+  chrome.runtime.sendMessage({ type, ...payload });
+}
+
+/**
+ * Persist current settings to chrome.storage.sync.
+ */
+export function saveSettings(uiState) {
+  chrome.storage.sync.set(uiState.settings);
+}
+
+/**
+ * Push current settings to the offscreen player via UPDATE_SETTINGS.
+ */
+export function sendSettings(uiState) {
+  sendCommand('UPDATE_SETTINGS', { settings: uiState.settings });
+}
+
+/**
+ * Wire up all settings panel event listeners (sliders, selects, checkboxes, buttons).
+ * `extraHandlers` can include:
+ *   - onMiniPlayerChange(checked): called when the mini-player checkbox toggles
+ *   - onHighlightModeChange(): called after highlight mode changes (to re-render)
+ */
+export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
+  const debouncedSave = debounce(() => saveSettings(uiState), 300);
+
+  if (elements.rateRange) {
+    elements.rateRange.oninput = (e) => {
+      uiState.settings.rate = parseFloat(e.target.value);
+      if (elements.rateValue) elements.rateValue.textContent = e.target.value + "x";
+      debouncedSave();
+    };
+    elements.rateRange.onchange = () => {
+      saveSettings(uiState);
+      sendSettings(uiState);
+    };
+  }
+
+  if (elements.pitchRange) {
+    elements.pitchRange.oninput = (e) => {
+      uiState.settings.pitch = parseFloat(e.target.value);
+      if (elements.pitchValue) elements.pitchValue.textContent = e.target.value;
+      debouncedSave();
+    };
+    elements.pitchRange.onchange = () => {
+      saveSettings(uiState);
+      sendSettings(uiState);
+    };
+  }
+
+  if (elements.volumeRange) {
+    elements.volumeRange.oninput = (e) => {
+      uiState.settings.volume = parseFloat(e.target.value);
+      if (elements.volumeValue) elements.volumeValue.textContent = e.target.value;
+      debouncedSave();
+    };
+    elements.volumeRange.onchange = () => {
+      saveSettings(uiState);
+      sendSettings(uiState);
+    };
+  }
+
+  if (elements.voiceSelect) {
+    elements.voiceSelect.onchange = (e) => {
+      uiState.settings.voiceName = e.target.value;
+      saveSettings(uiState);
+      sendSettings(uiState);
+    };
+  }
+
+  if (elements.highlightModeSelect) {
+    elements.highlightModeSelect.onchange = (e) => {
+      uiState.settings.highlightMode = e.target.value;
+      saveSettings(uiState);
+      sendSettings(uiState);
+      if (extraHandlers.onHighlightModeChange) extraHandlers.onHighlightModeChange();
+    };
+  }
+
+  if (elements.chkAutoScroll) {
+    elements.chkAutoScroll.onchange = (e) => {
+      uiState.settings.autoScroll = e.target.checked;
+      saveSettings(uiState);
+      sendSettings(uiState);
+    };
+  }
+
+  if (elements.chkMiniPlayer) {
+    elements.chkMiniPlayer.onchange = (e) => {
+      uiState.settings.miniPlayer = e.target.checked;
+      saveSettings(uiState);
+      sendSettings(uiState);
+      if (extraHandlers.onMiniPlayerChange) extraHandlers.onMiniPlayerChange(e.target.checked);
+    };
+  }
+
+  if (elements.btnSettings && elements.settingsPanel) {
+    elements.btnSettings.onclick = () => elements.settingsPanel.classList.remove('hidden');
+  }
+  if (elements.btnCloseSettings && elements.settingsPanel) {
+    elements.btnCloseSettings.onclick = () => elements.settingsPanel.classList.add('hidden');
+  }
+
+  if (elements.btnTheme) {
+    elements.btnTheme.onclick = () => {
+      const themes = ['auto', 'light', 'dark'];
+      const current = uiState.settings.theme || 'auto';
+      const next = themes[(themes.indexOf(current) + 1) % themes.length];
+      uiState.settings.theme = next;
+      applyTheme(next, elements.iconTheme || null);
+      saveSettings(uiState);
+      sendSettings(uiState);
+    };
+  }
+
+  if (elements.btnTestVoice) {
+    elements.btnTestVoice.onclick = () => sendCommand('TEST');
+  }
+
+  if (elements.btnReset) {
+    elements.btnReset.onclick = async () => {
+      const defaultSettings = {
+        voiceName: null,
+        rate: 1.0,
+        pitch: 1.0,
+        volume: 1.0,
+        highlightMode: 'sentence',
+        autoScroll: true,
+        theme: 'auto'
+      };
+      // Preserve miniPlayer if the element exists (popup-specific)
+      if (elements.chkMiniPlayer) defaultSettings.miniPlayer = true;
+
+      uiState.settings = defaultSettings;
+      await saveSettings(uiState);
+      await loadSharedSettings(uiState, elements);
+      applyTheme(uiState.settings.theme, elements.iconTheme || null);
+      sendSettings(uiState);
+    };
+  }
+}
+
+/**
+ * Wire up playback control buttons (play, stop, next, prev, paragraph nav).
+ * `playGuard` is called before play — should return true if play should be blocked.
+ */
+export function wirePlayerControls(uiState, elements, playGuard = null) {
+  if (elements.btnPlay) {
+    elements.btnPlay.onclick = () => {
+      if (playGuard && playGuard()) return;
+      sendCommand('TOGGLE_PLAY');
+    };
+  }
+
+  if (elements.btnStop) {
+    elements.btnStop.onclick = () => sendCommand('STOP');
+  }
+
+  if (elements.btnNext) {
+    elements.btnNext.onclick = () => sendCommand('NEXT');
+  }
+  if (elements.btnPrev) {
+    elements.btnPrev.onclick = () => sendCommand('PREV');
+  }
+
+  if (elements.btnNextPara) {
+    elements.btnNextPara.onclick = () => sendCommand('NEXT_PARA');
+  }
+  if (elements.btnPrevPara) {
+    elements.btnPrevPara.onclick = () => sendCommand('PREV_PARA');
+  }
+}
+
+/**
+ * Create the standard callback set for handleUpdateUI, eliminating
+ * the identical thin wrapper functions that popup.js and pdf-viewer.js
+ * previously defined.
+ */
+export function createHandleUpdateUICallbacks(uiState, elements) {
+  return {
+    renderSentences: () => renderSentences(uiState, elements.textContent, (index) => sendCommand('JUMP', { index })),
+    highlightWord: (boundary) => highlightWord(uiState, elements.textContent, boundary),
+    highlightCurrentSentence: () => highlightCurrentSentence(uiState, elements.textContent),
+    togglePlayIcon: (active) => togglePlayIcon(active, elements.iconPlay, elements.iconPause),
+    updateProgress: () => updateProgress(uiState, elements.progressBar),
+    updatePlayButtonState: () => setControlsEnabled(elements, uiState.sentences.length > 0),
+  };
+}
