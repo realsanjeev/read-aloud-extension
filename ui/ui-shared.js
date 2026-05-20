@@ -89,12 +89,57 @@ export function setupVoiceSelection(uiState, elements, voiceRetryRef) {
     if (elements.voiceError) elements.voiceError.classList.add('hidden');
     if (elements.voiceSelect) {
       elements.voiceSelect.innerHTML = '';
+
+      const voicesByLang = {};
+      const userLang = navigator.language || 'en';
+      const langDN = window.Intl && window.Intl.DisplayNames ? new Intl.DisplayNames([userLang], { type: 'language' }) : null;
+      const regionDN = window.Intl && window.Intl.DisplayNames ? new Intl.DisplayNames([userLang], { type: 'region' }) : null;
+      const scriptDN = window.Intl && window.Intl.DisplayNames ? new Intl.DisplayNames([userLang], { type: 'script' }) : null;
+
       voices.forEach(v => {
-        const opt = document.createElement('option');
-        opt.value = v.name;
-        opt.textContent = `${v.name} (${v.lang})`;
-        elements.voiceSelect.appendChild(opt);
+        let label = v.lang || 'Unknown';
+        if (langDN && v.lang) {
+          try {
+            // Replace underscores with dashes for Intl compatibility (e.g. zh_CN -> zh-CN)
+            const normalizedLang = v.lang.replace('_', '-');
+            if (window.Intl && window.Intl.Locale) {
+              const loc = new Intl.Locale(normalizedLang);
+              let base = langDN.of(loc.language);
+              let suffixes = [];
+              if (loc.script && scriptDN) suffixes.push(scriptDN.of(loc.script));
+              if (loc.region && regionDN) suffixes.push(regionDN.of(loc.region));
+              
+              if (suffixes.length > 0) {
+                label = `${base} (${suffixes.join(', ')})`;
+              } else {
+                label = base;
+              }
+            } else {
+              label = langDN.of(normalizedLang);
+            }
+          } catch (e) {
+            // Fallback to lang code if Intl fails
+          }
+        }
+        if (!voicesByLang[label]) {
+          voicesByLang[label] = [];
+        }
+        voicesByLang[label].push(v);
       });
+
+      const sortedLangs = Object.keys(voicesByLang).sort();
+      sortedLangs.forEach(label => {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = label;
+        voicesByLang[label].forEach(v => {
+          const opt = document.createElement('option');
+          opt.value = v.name;
+          opt.textContent = v.name;
+          optgroup.appendChild(opt);
+        });
+        elements.voiceSelect.appendChild(optgroup);
+      });
+
       if (uiState.settings.voiceName) {
         elements.voiceSelect.value = uiState.settings.voiceName;
       }
@@ -414,11 +459,11 @@ export function wirePlayerControls(uiState, elements, playGuard = null) {
 }
 
 /**
- * Create the standard callback set for handleUpdateUI, eliminating
- * the identical thin wrapper functions that popup.js and pdf-viewer.js
- * previously defined.
+ * Create the standard callbacks object for handleUpdateUI.
+ * Eliminates boilerplate in popup.js and pdf-viewer.js.
+ * `extraCallbacks` can override any default callback (e.g. updatePlayButtonState).
  */
-export function createHandleUpdateUICallbacks(uiState, elements) {
+export function createHandleUpdateUICallbacks(uiState, elements, extraCallbacks = {}) {
   return {
     renderSentences: () => renderSentences(uiState, elements.textContent, (index) => sendCommand('JUMP', { index })),
     highlightWord: (boundary) => highlightWord(uiState, elements.textContent, boundary),
@@ -426,5 +471,7 @@ export function createHandleUpdateUICallbacks(uiState, elements) {
     togglePlayIcon: (active) => togglePlayIcon(active, elements.iconPlay, elements.iconPause),
     updateProgress: () => updateProgress(uiState, elements.progressBar),
     updatePlayButtonState: () => setControlsEnabled(elements, uiState.sentences.length > 0),
+    ...extraCallbacks
   };
 }
+
