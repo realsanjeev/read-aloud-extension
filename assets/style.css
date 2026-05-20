@@ -412,6 +412,41 @@ body {
   border-color: var(--primary-color);
 }
 
+.preset-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.preset-btn {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  min-width: 52px;
+  text-align: center;
+}
+
+.preset-btn:hover {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+  background: var(--highlight-bg);
+  transform: translateY(-1px);
+}
+
+.preset-btn.active {
+  background: var(--primary-gradient);
+  color: white;
+  border-color: transparent;
+  box-shadow: 0 4px 12px -2px rgba(16, 185, 129, 0.3);
+}
+
 input[type="range"] {
   width: 100%;
   accent-color: var(--primary-color);

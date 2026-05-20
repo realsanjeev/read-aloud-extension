@@ -64,6 +64,11 @@ export async function loadSharedSettings(uiState, elements) {
 
   if (elements.rateRange) elements.rateRange.value = uiState.settings.rate;
   if (elements.rateValue) elements.rateValue.textContent = uiState.settings.rate + "x";
+  if (elements.ratePresets) {
+    elements.ratePresets.querySelectorAll('.preset-btn').forEach(btn => {
+      btn.classList.toggle('active', parseFloat(btn.dataset.rate) === uiState.settings.rate);
+    });
+  }
   if (elements.pitchRange) elements.pitchRange.value = uiState.settings.pitch;
   if (elements.pitchValue) elements.pitchValue.textContent = uiState.settings.pitch;
   if (elements.volumeRange) elements.volumeRange.value = uiState.settings.volume;
@@ -315,11 +320,35 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
     elements.rateRange.oninput = (e) => {
       uiState.settings.rate = parseFloat(e.target.value);
       if (elements.rateValue) elements.rateValue.textContent = e.target.value + "x";
+      if (elements.ratePresets) {
+        elements.ratePresets.querySelectorAll('.preset-btn').forEach(btn => {
+          btn.classList.toggle('active', parseFloat(btn.dataset.rate) === uiState.settings.rate);
+        });
+      }
       debouncedSave();
     };
     elements.rateRange.onchange = () => {
       saveSettings(uiState);
       sendSettings(uiState);
+    };
+  }
+
+  if (elements.ratePresets) {
+    elements.ratePresets.onclick = (e) => {
+      const btn = e.target.closest('.preset-btn');
+      if (btn) {
+        const rate = parseFloat(btn.dataset.rate);
+        uiState.settings.rate = rate;
+        if (elements.rateRange) elements.rateRange.value = rate;
+        if (elements.rateValue) elements.rateValue.textContent = rate + "x";
+        
+        elements.ratePresets.querySelectorAll('.preset-btn').forEach(b => {
+          b.classList.toggle('active', b === btn);
+        });
+        
+        saveSettings(uiState);
+        sendSettings(uiState);
+      }
     };
   }
 
