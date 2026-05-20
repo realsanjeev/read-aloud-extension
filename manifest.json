@@ -19,7 +19,6 @@
       "128": "assets/icons/icon-128.png"
     }
   },
-  "options_page": "ui/options.html",
   "background": {
     "service_worker": "scripts/background.js"
   },
@@ -57,15 +56,9 @@
       "description": "Previous sentence"
     },
     "next_paragraph": {
-      "suggested_key": {
-        "default": "Alt+Shift+Period"
-      },
       "description": "Next paragraph"
     },
     "prev_paragraph": {
-      "suggested_key": {
-        "default": "Alt+Shift+Comma"
-      },
       "description": "Previous paragraph"
     }
   }

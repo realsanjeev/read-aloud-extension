@@ -19,6 +19,20 @@ const elements = {
   iconPlay: document.getElementById('iconPlay'),
   iconPause: document.getElementById('iconPause'),
   iconTheme: document.getElementById('iconTheme'),
+  settingsPanel: document.getElementById('settingsPanel'),
+  btnCloseSettings: document.getElementById('btnCloseSettings'),
+  btnReset: document.getElementById('btnReset'),
+  btnTestVoice: document.getElementById('btnTestVoice'),
+  voiceSelect: document.getElementById('voiceSelect'),
+  voiceError: document.getElementById('voiceError'),
+  rateRange: document.getElementById('rateRange'),
+  rateValue: document.getElementById('rateValue'),
+  pitchRange: document.getElementById('pitchRange'),
+  pitchValue: document.getElementById('pitchValue'),
+  volumeRange: document.getElementById('volumeRange'),
+  volumeValue: document.getElementById('volumeValue'),
+  highlightModeSelect: document.getElementById('highlightModeSelect'),
+  chkAutoScroll: document.getElementById('chkAutoScroll'),
 };
 
 // --- Global State ---
@@ -39,20 +53,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   shared.setControlsEnabled(elements, false);
   await shared.loadSharedSettings(uiState, elements);
   shared.applyTheme(uiState.settings.theme, elements.iconTheme);
-  voices = shared.setupVoiceSelection(uiState, {}, voiceRetryRef);
+  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef);
 
-  if (elements.btnSettings) {
-    elements.btnSettings.onclick = () => {
-      if (chrome.runtime.openOptionsPage) {
-        chrome.runtime.openOptionsPage();
-      } else {
-        window.open(chrome.runtime.getURL('ui/options.html'));
-      }
-    };
-  }
-
-  // Wire up theme toggle
-  shared.wireSettingsListeners(uiState, elements);
+  // Wire up settings panel event listeners
+  shared.wireSettingsListeners(uiState, elements, {
+    onHighlightModeChange: () => {
+      shared.renderSentences(uiState, elements.textContent, (index) => shared.sendCommand('JUMP', { index }));
+      shared.highlightCurrentSentence(uiState, elements.textContent);
+    }
+  });
   
   shared.wirePlayerControls(uiState, elements, () => {
     if (!contentReady || uiState.sentences.length === 0) {

@@ -20,6 +20,23 @@ const elements = {
   iconPause: document.getElementById('iconPause'),
   iconTheme: document.getElementById('iconTheme'),
   resumePrompt: document.getElementById('resumePrompt'),
+  btnCopy: document.getElementById('btnCopy'),
+  btnDownload: document.getElementById('btnDownload'),
+  settingsPanel: document.getElementById('settingsPanel'),
+  btnCloseSettings: document.getElementById('btnCloseSettings'),
+  btnReset: document.getElementById('btnReset'),
+  btnTestVoice: document.getElementById('btnTestVoice'),
+  voiceSelect: document.getElementById('voiceSelect'),
+  voiceError: document.getElementById('voiceError'),
+  rateRange: document.getElementById('rateRange'),
+  rateValue: document.getElementById('rateValue'),
+  pitchRange: document.getElementById('pitchRange'),
+  pitchValue: document.getElementById('pitchValue'),
+  volumeRange: document.getElementById('volumeRange'),
+  volumeValue: document.getElementById('volumeValue'),
+  highlightModeSelect: document.getElementById('highlightModeSelect'),
+  chkAutoScroll: document.getElementById('chkAutoScroll'),
+  chkMiniPlayer: document.getElementById('chkMiniPlayer'),
 };
 
 // --- Global State ---
@@ -78,35 +95,75 @@ async function updateMiniPlayer(show) {
 // --- Helpers ---
 
 function updatePlayButtonState() {
-  shared.setControlsEnabled(elements, uiState.sentences.length > 0);
+  const hasContent = uiState.sentences.length > 0;
+  shared.setControlsEnabled(elements, hasContent);
+  if (elements.btnCopy) elements.btnCopy.disabled = !hasContent;
+  if (elements.btnDownload) elements.btnDownload.disabled = !hasContent;
 }
 
 function handleUpdateUI(state) {
-  shared.handleUpdateUI(uiState, state, shared.createHandleUpdateUICallbacks(uiState, elements));
+  shared.handleUpdateUI(uiState, state, shared.createHandleUpdateUICallbacks(uiState, elements, {
+    updatePlayButtonState: updatePlayButtonState
+  }));
+}
+
+// --- Export Functions ---
+
+async function copyText() {
+  if (uiState.sentences.length === 0) return;
+  const text = uiState.sentences.join(' ');
+  try {
+    await navigator.clipboard.writeText(text);
+    elements.btnCopy.classList.add('success');
+    setTimeout(() => elements.btnCopy.classList.remove('success'), 2000);
+  } catch (err) {
+    console.error('Failed to copy text:', err);
+  }
+}
+
+function downloadText() {
+  if (uiState.sentences.length === 0) return;
+  const text = uiState.sentences.join(' ');
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  
+  // Try to get a decent filename from the current tab title
+  chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+    const title = tab?.title || 'extracted-text';
+    const filename = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.txt`;
+    
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
 }
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', async () => {
   shared.setControlsEnabled(elements, false);
+  if (elements.btnCopy) elements.btnCopy.disabled = true;
+  if (elements.btnDownload) elements.btnDownload.disabled = true;
+
   await shared.loadSharedSettings(uiState, elements);
   shared.applyTheme(uiState.settings.theme, elements.iconTheme);
   
-  // We still fetch voices for auto-selection logic
-  voices = shared.setupVoiceSelection(uiState, {}, voiceRetryRef);
+  // Set up voice selection using UI elements
+  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef);
 
-  if (elements.btnSettings) {
-    elements.btnSettings.onclick = () => {
-      if (chrome.runtime.openOptionsPage) {
-        chrome.runtime.openOptionsPage();
-      } else {
-        window.open(chrome.runtime.getURL('ui/options.html'));
-      }
-    };
-  }
+  if (elements.btnCopy) elements.btnCopy.onclick = copyText;
+  if (elements.btnDownload) elements.btnDownload.onclick = downloadText;
 
-  // Wire up theme toggle
+  // Wire up settings panel event listeners
   shared.wireSettingsListeners(uiState, elements, {
-    onMiniPlayerChange: (checked) => updateMiniPlayer(checked)
+    onMiniPlayerChange: (checked) => updateMiniPlayer(checked),
+    onHighlightModeChange: () => {
+      shared.renderSentences(uiState, elements.textContent, (index) => shared.sendCommand('JUMP', { index }));
+      shared.highlightCurrentSentence(uiState, elements.textContent);
+    }
   });
   
   shared.wirePlayerControls(uiState, elements, () => {
