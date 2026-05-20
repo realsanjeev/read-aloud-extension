@@ -75,6 +75,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
     }
 
+    if (msg.type === 'UPDATE_UI' && msg.state) {
+        const { sentences, currentIndex, isPlaying, isPaused } = msg.state;
+        if (sentences && sentences.length > 0 && (isPlaying || isPaused)) {
+            const progress = Math.round(((currentIndex + 1) / sentences.length) * 100);
+            chrome.action.setBadgeText({ text: `${progress}%` });
+            chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' }); // Green progress
+        } else {
+            chrome.action.setBadgeText({ text: '' });
+        }
+        return false;
+    }
+
+    if (msg.type === 'STOP_COMPLETE') {
+        chrome.action.setBadgeText({ text: '' });
+        return false;
+    }
+
     // Forward player commands to offscreen
     if (msg.type && (msg.type === 'PLAY' || msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE' || msg.type === 'DETECT_LANG')) {
         if (msg._forwarded) return; // Prevent infinite recursion
