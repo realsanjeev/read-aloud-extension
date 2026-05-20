@@ -9,6 +9,7 @@ const elements = {
   voiceError: document.getElementById('voiceError'),
   rateRange: document.getElementById('rateRange'),
   rateValue: document.getElementById('rateValue'),
+  ratePresets: document.getElementById('ratePresets'),
   pitchRange: document.getElementById('pitchRange'),
   pitchValue: document.getElementById('pitchValue'),
   volumeRange: document.getElementById('volumeRange'),
