@@ -126,7 +126,9 @@ chrome.commands.onCommand.addListener(async (command) => {
             'play_stop': 'TOGGLE_PLAY',
             'pause_resume': 'PAUSE',
             'forward': 'NEXT',
-            'rewind': 'PREV'
+            'rewind': 'PREV',
+            'next_paragraph': 'NEXT_PARA',
+            'prev_paragraph': 'PREV_PARA'
         };
         if (msgMap[command]) {
             chrome.runtime.sendMessage({ type: msgMap[command], _forwarded: true });

@@ -55,6 +55,18 @@
         "default": "Alt+Comma"
       },
       "description": "Previous sentence"
+    },
+    "next_paragraph": {
+      "suggested_key": {
+        "default": "Alt+Shift+Period"
+      },
+      "description": "Next paragraph"
+    },
+    "prev_paragraph": {
+      "suggested_key": {
+        "default": "Alt+Shift+Comma"
+      },
+      "description": "Previous paragraph"
     }
   }
 }
