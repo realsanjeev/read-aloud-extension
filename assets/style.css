@@ -137,6 +137,18 @@ body {
   box-shadow: var(--shadow-sm);
 }
 
+.icon-btn.success {
+  color: #10b981 !important;
+  border-color: #10b981 !important;
+  background: rgba(16, 185, 129, 0.1) !important;
+}
+
+.icon-btn[disabled] {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* Resume Prompt */
 .resume-prompt {
   display: flex;
