@@ -13,26 +13,12 @@ const elements = {
   btnPrevPara: document.getElementById('btnPrevPara'),
   btnNextPara: document.getElementById('btnNextPara'),
   btnSettings: document.getElementById('btnSettings'),
-  btnCloseSettings: document.getElementById('btnCloseSettings'),
-  btnReset: document.getElementById('btnReset'),
-  btnTestVoice: document.getElementById('btnTestVoice'),
   btnTheme: document.getElementById('btnTheme'),
   textContent: document.getElementById('textArea'),
   progressBar: document.getElementById('progressBar'),
   iconPlay: document.getElementById('iconPlay'),
   iconPause: document.getElementById('iconPause'),
   iconTheme: document.getElementById('iconTheme'),
-  settingsPanel: document.getElementById('settingsPanel'),
-  voiceSelect: document.getElementById('voiceSelect'),
-  voiceError: document.getElementById('voiceError'),
-  rateRange: document.getElementById('rateRange'),
-  rateValue: document.getElementById('rateValue'),
-  pitchRange: document.getElementById('pitchRange'),
-  pitchValue: document.getElementById('pitchValue'),
-  volumeRange: document.getElementById('volumeRange'),
-  volumeValue: document.getElementById('volumeValue'),
-  highlightModeSelect: document.getElementById('highlightModeSelect'),
-  chkAutoScroll: document.getElementById('chkAutoScroll'),
 };
 
 // --- Global State ---
@@ -53,15 +39,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   shared.setControlsEnabled(elements, false);
   await shared.loadSharedSettings(uiState, elements);
   shared.applyTheme(uiState.settings.theme, elements.iconTheme);
-  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef);
+  voices = shared.setupVoiceSelection(uiState, {}, voiceRetryRef);
 
-  // Wire up all settings and player controls via shared module
-  shared.wireSettingsListeners(uiState, elements, {
-    onHighlightModeChange: () => {
-      shared.renderSentences(uiState, elements.textContent, (index) => shared.sendCommand('JUMP', { index }));
-      shared.highlightCurrentSentence(uiState, elements.textContent);
-    }
-  });
+  if (elements.btnSettings) {
+    elements.btnSettings.onclick = () => {
+      if (chrome.runtime.openOptionsPage) {
+        chrome.runtime.openOptionsPage();
+      } else {
+        window.open(chrome.runtime.getURL('ui/options.html'));
+      }
+    };
+  }
+
+  // Wire up theme toggle
+  shared.wireSettingsListeners(uiState, elements);
+  
   shared.wirePlayerControls(uiState, elements, () => {
     if (!contentReady || uiState.sentences.length === 0) {
       elements.textContent.classList.add('shake');

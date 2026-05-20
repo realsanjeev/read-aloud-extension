@@ -19,6 +19,7 @@
       "128": "assets/icons/icon-128.png"
     }
   },
+  "options_page": "ui/options.html",
   "background": {
     "service_worker": "scripts/background.js"
   },
