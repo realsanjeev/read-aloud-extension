@@ -183,10 +183,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 1. Check if background already has a state (playback in progress)
   chrome.runtime.sendMessage({ type: 'GET_STATE' }, async (response) => {
     if (chrome.runtime.lastError) { /* Offscreen not running yet */ }
-    const isDifferentTab = response && response.state && response.state.tabId && response.state.tabId !== currentTab.id;
+    const isDifferentPage = response && response.state && (
+      (response.state.tabId && response.state.tabId !== currentTab.id) ||
+      (response.state.tabUrl && response.state.tabUrl !== currentTab.url)
+    );
     const wasPlaying = response && response.state && response.state.isPlaying;
 
-    if (response && response.state && response.state.sentences.length > 0 && !isDifferentTab) {
+    if (response && response.state && response.state.sentences.length > 0 && !isDifferentPage) {
       handleUpdateUI(response.state);
       contentReady = true;
       updatePlayButtonState();
@@ -203,7 +206,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (saved && saved.index > 0) {
             showResumePrompt(saved.index, text, currentTab.id, currentTab.url);
           } else {
-            const autoPlay = isDifferentTab && wasPlaying;
+            const autoPlay = isDifferentPage && wasPlaying;
             shared.sendCommand('INIT', { text, index: 0, settings: uiState.settings, tabId: currentTab.id, tabUrl: currentTab.url, autoPlay });
           }
           if (uiState.settings.miniPlayer) updateMiniPlayer(true);
