@@ -277,6 +277,7 @@ function play() {
     
     playerState.isPlaying = true;
     playerState.isPaused = false;
+    sendUpdate();
     speakCurrentSentence();
 }
 
@@ -322,16 +323,16 @@ async function stop() {
 function next() {
     if (playerState.currentIndex < playerState.sentences.length - 1) {
         playerState.currentIndex++;
+        sendUpdate();
         if (playerState.isPlaying) speakCurrentSentence();
-        else sendUpdate();
     }
 }
 
 function prev() {
     if (playerState.currentIndex > 0) {
         playerState.currentIndex--;
+        sendUpdate();
         if (playerState.isPlaying) speakCurrentSentence();
-        else sendUpdate();
     }
 }
 
@@ -346,14 +347,12 @@ function nextParagraph() {
     const nextBreak = playerState.lineBreaks.find(b => b > playerState.currentIndex);
     if (nextBreak !== undefined) {
         playerState.currentIndex = nextBreak;
-        if (playerState.isPlaying) speakCurrentSentence();
-        else sendUpdate();
     } else {
         // Jump to last sentence
         playerState.currentIndex = playerState.sentences.length - 1;
-        if (playerState.isPlaying) speakCurrentSentence();
-        else sendUpdate();
     }
+    sendUpdate();
+    if (playerState.isPlaying) speakCurrentSentence();
 }
 
 function prevParagraph() {
@@ -365,13 +364,11 @@ function prevParagraph() {
     const prevBreaks = playerState.lineBreaks.filter(b => b < playerState.currentIndex);
     if (prevBreaks.length > 0) {
         playerState.currentIndex = prevBreaks[prevBreaks.length - 1];
-        if (playerState.isPlaying) speakCurrentSentence();
-        else sendUpdate();
     } else {
         playerState.currentIndex = 0;
-        if (playerState.isPlaying) speakCurrentSentence();
-        else sendUpdate();
     }
+    sendUpdate();
+    if (playerState.isPlaying) speakCurrentSentence();
 }
 
 function speakCurrentSentence() {

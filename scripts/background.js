@@ -132,13 +132,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === 'UPDATE_UI' && msg.state) {
-        const { sentences, currentIndex, isPlaying, isPaused } = msg.state;
+        const { sentences, currentIndex, isPlaying, isPaused, tabId } = msg.state;
         if (sentences && sentences.length > 0 && (isPlaying || isPaused)) {
             const progress = Math.round(((currentIndex + 1) / sentences.length) * 100);
             chrome.action.setBadgeText({ text: `${progress}%` });
             chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' }); // Green progress
         } else {
             chrome.action.setBadgeText({ text: '' });
+        }
+
+        // Forward state update to the specific tab content script for mini-player sync
+        if (tabId) {
+            chrome.tabs.sendMessage(tabId, msg, () => {
+                if (chrome.runtime.lastError) {
+                    // Ignore errors if the tab was closed or content script is not listening yet
+                }
+            });
         }
         return false;
     }
