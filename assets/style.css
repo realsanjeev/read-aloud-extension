@@ -538,7 +538,7 @@ input[type="range"] {
 }
 
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 /* PDF Viewer Styles */
@@ -609,4 +609,92 @@ input[type="range"] {
   .pdf-player-controls .control-btn.lg {
     transition: none;
   }
+}
+
+/* Drag and Drop Zone */
+.pdf-drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--primary-color);
+  border-radius: 24px;
+  background: var(--bg-secondary);
+  padding: 60px 40px;
+  margin: 80px auto;
+  max-width: 520px;
+  text-align: center;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  border-color: var(--primary-color);
+}
+
+.pdf-drop-zone:hover, .pdf-drop-zone.dragover {
+  border-color: #0891b2;
+  background: var(--highlight-bg);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+.drop-zone-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.drop-icon-container {
+  background: var(--highlight-bg);
+  padding: 24px;
+  border-radius: 50%;
+  color: var(--primary-color);
+  margin-bottom: 8px;
+  box-shadow: 0 8px 16px -4px rgba(16, 185, 129, 0.2);
+}
+
+.drop-icon {
+  display: block;
+  animation: pulse 2s infinite ease-in-out;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.08); opacity: 0.85; }
+}
+
+.pdf-drop-zone h3 {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: var(--text-main);
+  background: var(--primary-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.drop-zone-text {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.drop-zone-btn {
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 0 28px;
+  width: auto !important;
+  height: 44px !important;
+  border-radius: 100px !important;
+  border: none;
+  cursor: pointer;
+  background: var(--primary-gradient);
+  color: white;
+  box-shadow: 0 8px 16px -4px rgba(16, 185, 129, 0.4);
+  transition: all 0.2s ease;
+}
+
+.drop-zone-btn:hover {
+  transform: scale(1.05) translateY(-1px);
+  box-shadow: 0 12px 20px -4px rgba(16, 185, 129, 0.5);
 }

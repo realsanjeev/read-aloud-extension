@@ -58,6 +58,23 @@
       <div id="textArea" class="text-content pdf-content">
         <p class="placeholder-text">Loading PDF and extracting text...</p>
       </div>
+
+      <!-- Drag & Drop Zone -->
+      <div id="dropZone" class="pdf-drop-zone hidden">
+        <div class="drop-zone-content">
+          <div class="drop-icon-container">
+            <svg viewBox="0 0 24 24" width="48" height="48" stroke="currentColor" stroke-width="1.5" fill="none"
+              stroke-linecap="round" stroke-linejoin="round" class="drop-icon">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+            </svg>
+          </div>
+          <h3>Listen to your PDF</h3>
+          <p class="drop-zone-text">Drag & drop your PDF file here, or click to browse</p>
+          <button id="btnBrowse" class="drop-zone-btn">Browse File</button>
+          <input type="file" id="fileInput" accept="application/pdf" style="display: none;">
+        </div>
+      </div>
     </main>
 
     <!-- Settings Panel (Overlay) -->
