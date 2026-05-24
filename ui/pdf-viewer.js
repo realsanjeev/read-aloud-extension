@@ -306,6 +306,11 @@ async function extractPdfText(source) {
 // --- Communication ---
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (sender.id && sender.id !== chrome.runtime.id) {
+    console.warn("Unauthorized message origin:", sender.id);
+    return false;
+  }
+
   if (msg.type === 'UPDATE_UI') {
     shared.handleUpdateUI(uiState, msg.state, shared.createHandleUpdateUICallbacks(uiState, elements));
     return false;

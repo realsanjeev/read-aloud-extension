@@ -34,6 +34,11 @@ function safeSendMessage(message, callback) {
 
 // Listen for messages from the popup / background / offscreen
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (sender.id && sender.id !== chrome.runtime.id) {
+        console.warn("[ReadAloud] Unauthorized message origin:", sender.id);
+        return;
+    }
+
     if (msg.type === 'EXTRACT_CONTENT') {
         try {
             const content = extractContentFromPage();

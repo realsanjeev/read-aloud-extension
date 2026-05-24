@@ -228,6 +228,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 // --- Communication ---
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (sender.id && sender.id !== chrome.runtime.id) {
+    console.warn("Unauthorized message origin:", sender.id);
+    return false;
+  }
+
   if (msg.type === 'UPDATE_UI') {
     handleUpdateUI(msg.state);
     return false;
