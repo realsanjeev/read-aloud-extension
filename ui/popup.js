@@ -46,7 +46,6 @@ uiState.settings.miniPlayer = true; // Popup specific default
 let voices = [];
 let contentReady = false;
 let voiceRetryRef = { count: 0 };
-const scriptInjectedTabs = new Set();
 
 // --- Voice Auto-Selection ---
 async function autoSelectVoice(text) {
@@ -76,15 +75,19 @@ async function autoSelectVoice(text) {
 // --- Mini-Player Toggle ---
 async function updateMiniPlayer(show) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.id) return;
+  if (!tab || !tab.id || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:')) return;
 
   if (show) {
     try {
       await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_MINI_PLAYER', visible: true });
     } catch (e) {
-      await injectContentScripts(tab.id);
-      chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_MINI_PLAYER', visible: true })
-        .catch(() => {});
+      try {
+        await injectContentScripts(tab.id);
+        await new Promise(r => setTimeout(r, 100));
+        await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_MINI_PLAYER', visible: true });
+      } catch (err) {
+        console.warn("Popup: Failed to toggle mini-player after injection:", err.message);
+      }
     }
   } else {
     chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_MINI_PLAYER', visible: false })
@@ -288,8 +291,6 @@ async function getPageContent(tab) {
     }
   }
 
-  await injectContentScripts(tab.id);
-
   const trySendMessage = () => {
     return new Promise((resolve) => {
       chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_CONTENT' }, (response) => {
@@ -299,15 +300,20 @@ async function getPageContent(tab) {
     });
   };
 
-  let response;
-  let attempts = 0;
-  const maxAttempts = 10;
-  while ((!response || response.error) && attempts < maxAttempts) {
-    response = await trySendMessage();
-    if (!response || response.error) {
-      await new Promise(r => setTimeout(r, 200));
+  // 1. Try to send message first
+  let response = await trySendMessage();
+
+  // 2. If it failed due to missing content script connection, inject and retry
+  if (response && response.error) {
+    console.log("Popup: Content script not detected, injecting...");
+    try {
+      await injectContentScripts(tab.id);
+      // Small pause for initialization
+      await new Promise(r => setTimeout(r, 100));
+      response = await trySendMessage();
+    } catch (injectErr) {
+      console.error("Popup: Script injection and retry failed:", injectErr);
     }
-    attempts++;
   }
 
   if (response && response.result) {
@@ -317,14 +323,13 @@ async function getPageContent(tab) {
 }
 
 async function injectContentScripts(tabId) {
-  if (scriptInjectedTabs.has(tabId)) return;
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ['lib/Readability.js', 'scripts/content.js']
     });
-    scriptInjectedTabs.add(tabId);
   } catch (e) {
-    console.error("Script injection failed:", e);
+    console.error("Popup: Script injection failed:", e);
+    throw e;
   }
 }

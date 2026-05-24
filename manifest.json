@@ -6,7 +6,6 @@
   "description": "A Text-to-Speech extension that reads web pages aloud.",
   "permissions": [
     "activeTab",
-    "tabs",
     "scripting",
     "storage",
     "offscreen"

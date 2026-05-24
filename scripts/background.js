@@ -6,6 +6,64 @@ let offscreenClosing = false;
 const OFFSCREEN_DOCUMENT_PATH = chrome.runtime.getURL('ui/offscreen.html');
 
 /**
+ * Checks if the offscreen document is already created.
+ * Uses chrome.runtime.getContexts (Chrome 116+) or self.clients.matchAll() as a fallback (Chrome 109-115).
+ */
+async function hasOffscreenDocument() {
+    if (chrome.runtime.getContexts) {
+        try {
+            const existingContexts = await chrome.runtime.getContexts({
+                contextTypes: ['OFFSCREEN_DOCUMENT'],
+                documentUrls: [OFFSCREEN_DOCUMENT_PATH]
+            });
+            return existingContexts.length > 0;
+        } catch (e) {
+            console.warn("Background: getContexts failed:", e);
+        }
+    }
+    // Fallback for Chrome 109-115 using Service Worker clients
+    try {
+        const clients = await self.clients.matchAll();
+        return clients.some(client => client.url === OFFSCREEN_DOCUMENT_PATH);
+    } catch (e) {
+        console.warn("Background: self.clients.matchAll failed:", e);
+        return false;
+    }
+}
+
+/**
+ * Pings the offscreen document to ensure its scripts are loaded and message listeners active.
+ * Retries with backoff if a temporary connection error occurs.
+ */
+async function pingOffscreen() {
+    const maxAttempts = 10;
+    for (let i = 0; i < maxAttempts; i++) {
+        try {
+            const response = await new Promise((resolve, reject) => {
+                chrome.runtime.sendMessage({ type: 'PING', _forwarded: true }, (res) => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                    } else {
+                        resolve(res);
+                    }
+                });
+            });
+            if (response && response.status === 'pong') {
+                console.log("Background: Offscreen ready (PING successful)");
+                return true;
+            }
+        } catch (err) {
+            console.debug(`Background: Ping attempt ${i + 1} failed, retrying:`, err.message);
+            if (i === maxAttempts - 1) {
+                throw err;
+            }
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+    }
+    throw new Error("Background: Offscreen document ping timed out");
+}
+
+/**
  * Ensures the offscreen document is created and ready to receive messages.
  */
 async function ensureOffscreen() {
@@ -15,12 +73,8 @@ async function ensureOffscreen() {
     
     if (offscreenCreating) return offscreenCreating;
 
-    const existingContexts = await chrome.runtime.getContexts({
-        contextTypes: ['OFFSCREEN_DOCUMENT'],
-        documentUrls: [OFFSCREEN_DOCUMENT_PATH]
-    });
-
-    if (existingContexts.length > 0) return Promise.resolve();
+    const hasDoc = await hasOffscreenDocument();
+    if (hasDoc) return Promise.resolve();
 
     offscreenCreating = (async () => {
         try {
@@ -29,6 +83,11 @@ async function ensureOffscreen() {
                 reasons: ['AUDIO_PLAYBACK'],
                 justification: 'Text-to-Speech playback',
             });
+            // Guarantee that the offscreen scripts are loaded and listeners are active
+            await pingOffscreen();
+        } catch (e) {
+            console.error("Background: Error creating offscreen document:", e);
+            throw e;
         } finally {
             offscreenCreating = null;
         }
@@ -42,11 +101,8 @@ async function closeOffscreen() {
     offscreenClosing = true;
     offscreenClosePromise = (async () => {
         try {
-            const existingContexts = await chrome.runtime.getContexts({
-                contextTypes: ['OFFSCREEN_DOCUMENT'],
-                documentUrls: [OFFSCREEN_DOCUMENT_PATH]
-            });
-            if (existingContexts.length > 0) {
+            const hasDoc = await hasOffscreenDocument();
+            if (hasDoc) {
                 await chrome.offscreen.closeDocument();
             }
         } catch (e) {
@@ -93,12 +149,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     // Forward player commands to offscreen
-    if (msg.type && (msg.type === 'PLAY' || msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE' || msg.type === 'DETECT_LANG')) {
+    if (msg.type && (msg.type === 'PLAY' || msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE' || msg.type === 'DETECT_LANG' || msg.type === 'PING')) {
         if (msg._forwarded) return; // Prevent infinite recursion
 
         console.log("Background: Forwarding command to offscreen:", msg.type);
         ensureOffscreen().then(() => {
-            const expectsResponse = ['GET_STATE', 'DETECT_LANG', 'INIT'].includes(msg.type);
+            const expectsResponse = ['GET_STATE', 'DETECT_LANG', 'INIT', 'PING'].includes(msg.type);
 
             if (expectsResponse) {
                 chrome.runtime.sendMessage({ ...msg, _forwarded: true }, (response) => {
