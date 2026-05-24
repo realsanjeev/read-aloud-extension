@@ -24,15 +24,33 @@ let voiceRetryCount = 0;
 const MAX_VOICE_RETRIES = 20;
 let isSpeaking = false;
 
+/**
+ * Safely cancels any active SpeechSynthesis utterance and resets lock variables.
+ * Clears callbacks to prevent recursive event firing during cancellation.
+ */
+function cancelSpeech() {
+    if (playerState.utterance) {
+        playerState.utterance.onstart = null;
+        playerState.utterance.onend = null;
+        playerState.utterance.onerror = null;
+        playerState.utterance.onboundary = null;
+    }
+    window.speechSynthesis.cancel();
+    isSpeaking = false;
+}
+
 // Settings are initialized via INIT and UPDATE_SETTINGS messages from the popup
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // Ignore direct broadcasts from the popup; only accept commands proxied by the background service worker
-    if (msg.type && (msg.type === 'PLAY' || msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE' || msg.type === 'DETECT_LANG') && !msg._forwarded) {
+    if (msg.type && (msg.type === 'PLAY' || msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE' || msg.type === 'DETECT_LANG' || msg.type === 'PING') && !msg._forwarded) {
         return;
     }
 
     switch (msg.type) {
+        case 'PING':
+            sendResponse({ status: 'pong' });
+            break;
         case 'INIT':
             console.log("Offscreen: INIT received, text length:", msg.text ? msg.text.length : 0);
             initPlayer(msg.text, msg.index || 0, msg.settings, msg.autoPlay || false, msg.tabId, msg.tabUrl || null);
@@ -210,7 +228,7 @@ function tokenizeSentences(text) {
  * Initializes the player with new text.
  */
 function initPlayer(text, startIndex, settings = null, autoPlay = false, tabId = null, tabUrl = null) {
-    window.speechSynthesis.cancel();
+    cancelSpeech();
 
     if (tabId !== null) {
         playerState.tabId = tabId;
@@ -259,6 +277,7 @@ function play() {
     
     playerState.isPlaying = true;
     playerState.isPaused = false;
+    sendUpdate();
     speakCurrentSentence();
 }
 
@@ -266,7 +285,7 @@ function pause() {
     savePosition();
     playerState.isPlaying = false;
     playerState.isPaused = true;
-    window.speechSynthesis.cancel();
+    cancelSpeech();
     sendUpdate();
 }
 
@@ -291,7 +310,7 @@ async function stop() {
     playerState.isPlaying = false;
     playerState.isPaused = false;
     playerState.currentIndex = 0;
-    window.speechSynthesis.cancel();
+    cancelSpeech();
     sendUpdate();
     // Signal background that state is fully persisted and it's safe to close
     chrome.runtime.sendMessage({ type: 'STOP_COMPLETE' }, () => {
@@ -304,16 +323,16 @@ async function stop() {
 function next() {
     if (playerState.currentIndex < playerState.sentences.length - 1) {
         playerState.currentIndex++;
+        sendUpdate();
         if (playerState.isPlaying) speakCurrentSentence();
-        else sendUpdate();
     }
 }
 
 function prev() {
     if (playerState.currentIndex > 0) {
         playerState.currentIndex--;
+        sendUpdate();
         if (playerState.isPlaying) speakCurrentSentence();
-        else sendUpdate();
     }
 }
 
@@ -328,14 +347,12 @@ function nextParagraph() {
     const nextBreak = playerState.lineBreaks.find(b => b > playerState.currentIndex);
     if (nextBreak !== undefined) {
         playerState.currentIndex = nextBreak;
-        if (playerState.isPlaying) speakCurrentSentence();
-        else sendUpdate();
     } else {
         // Jump to last sentence
         playerState.currentIndex = playerState.sentences.length - 1;
-        if (playerState.isPlaying) speakCurrentSentence();
-        else sendUpdate();
     }
+    sendUpdate();
+    if (playerState.isPlaying) speakCurrentSentence();
 }
 
 function prevParagraph() {
@@ -347,26 +364,19 @@ function prevParagraph() {
     const prevBreaks = playerState.lineBreaks.filter(b => b < playerState.currentIndex);
     if (prevBreaks.length > 0) {
         playerState.currentIndex = prevBreaks[prevBreaks.length - 1];
-        if (playerState.isPlaying) speakCurrentSentence();
-        else sendUpdate();
     } else {
         playerState.currentIndex = 0;
-        if (playerState.isPlaying) speakCurrentSentence();
-        else sendUpdate();
     }
+    sendUpdate();
+    if (playerState.isPlaying) speakCurrentSentence();
 }
 
 function speakCurrentSentence() {
     if (isSpeaking) return;
     isSpeaking = true;
 
-    if (playerState.utterance) {
-        playerState.utterance.onend = null;
-        playerState.utterance.onerror = null;
-        playerState.utterance.onboundary = null;
-    }
-
-    window.speechSynthesis.cancel();
+    cancelSpeech();
+    isSpeaking = true;
     
     if (playerState.sentences.length === 0 || playerState.currentIndex >= playerState.sentences.length) {
         playerState.isPlaying = false;
@@ -523,7 +533,7 @@ function testVoice() {
     const wasPaused = playerState.isPaused;
     const savedIndex = playerState.currentIndex;
     
-    window.speechSynthesis.cancel();
+    cancelSpeech();
     
     const text = "This is a test of your selected voice.";
     const utter = new SpeechSynthesisUtterance(text);

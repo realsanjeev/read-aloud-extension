@@ -98,8 +98,6 @@ export function setupVoiceSelection(uiState, elements, voiceRetryRef) {
       const voicesByLang = {};
       const userLang = navigator.language || 'en';
       const langDN = window.Intl && window.Intl.DisplayNames ? new Intl.DisplayNames([userLang], { type: 'language' }) : null;
-      const regionDN = window.Intl && window.Intl.DisplayNames ? new Intl.DisplayNames([userLang], { type: 'region' }) : null;
-      const scriptDN = window.Intl && window.Intl.DisplayNames ? new Intl.DisplayNames([userLang], { type: 'script' }) : null;
 
       voices.forEach(v => {
         let label = v.lang || 'Unknown';
@@ -109,18 +107,12 @@ export function setupVoiceSelection(uiState, elements, voiceRetryRef) {
             const normalizedLang = v.lang.replace('_', '-');
             if (window.Intl && window.Intl.Locale) {
               const loc = new Intl.Locale(normalizedLang);
-              let base = langDN.of(loc.language);
-              let suffixes = [];
-              if (loc.script && scriptDN) suffixes.push(scriptDN.of(loc.script));
-              if (loc.region && regionDN) suffixes.push(regionDN.of(loc.region));
-              
-              if (suffixes.length > 0) {
-                label = `${base} (${suffixes.join(', ')})`;
-              } else {
-                label = base;
-              }
+              const base = langDN.of(loc.language);
+              label = base.charAt(0).toUpperCase() + base.slice(1);
             } else {
-              label = langDN.of(normalizedLang);
+              const baseLangCode = normalizedLang.split('-')[0];
+              const base = langDN.of(baseLangCode) || langDN.of(normalizedLang);
+              label = base.charAt(0).toUpperCase() + base.slice(1);
             }
           } catch (e) {
             // Fallback to lang code if Intl fails
