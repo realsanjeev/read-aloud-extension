@@ -81,9 +81,8 @@ function extractContentFromPage() {
             const article = reader.parse();
             
             if (article && article.content) {
-                const div = document.createElement('div');
-                div.innerHTML = article.content;
-                const text = div.innerText.trim();
+                const doc = new DOMParser().parseFromString(article.content, 'text/html');
+                const text = (doc.body.textContent || doc.body.innerText || '').trim();
                 if (text.length > 100) return text; // Use it if it seems substantial
             }
         } catch (e) {

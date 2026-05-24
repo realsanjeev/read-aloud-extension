@@ -100,7 +100,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   } catch (err) {
     console.error("PDF extraction failed:", err);
-    elements.textContent.innerHTML = `<p class="error">Error: ${err.message}</p>`;
+    const p = document.createElement('p');
+    p.className = 'error';
+    p.textContent = `Error: ${err.message}`;
+    elements.textContent.innerHTML = '';
+    elements.textContent.appendChild(p);
   }
 });
 
