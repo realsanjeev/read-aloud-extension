@@ -131,6 +131,39 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
     }
 
+    if (msg.type === 'FETCH_PDF' && msg.url) {
+        const origin = new URL(msg.url).origin + '/*';
+        chrome.permissions.contains({ origins: [origin] }, (hasPermission) => {
+            const doFetch = () => {
+                fetch(msg.url)
+                    .then(async (response) => {
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        const buffer = await response.arrayBuffer();
+                        sendResponse({ status: 'success', data: new Uint8Array(buffer) });
+                    })
+                    .catch((err) => {
+                        console.error("Background: FETCH_PDF failed:", err);
+                        sendResponse({ status: 'error', message: err.message });
+                    });
+            };
+
+            if (hasPermission) {
+                doFetch();
+            } else {
+                chrome.permissions.request({ origins: [origin] }, (granted) => {
+                    if (granted) {
+                        doFetch();
+                    } else {
+                        sendResponse({ status: 'error', message: 'Host permission denied. Please allow access to this site to load the PDF.' });
+                    }
+                });
+            }
+        });
+        return true; // Keep channel open for async response
+    }
+
     if (msg.type === 'UPDATE_UI' && msg.state) {
         const { sentences, currentIndex, isPlaying, isPaused, tabId } = msg.state;
         if (sentences && sentences.length > 0 && (isPlaying || isPaused)) {

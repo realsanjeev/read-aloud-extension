@@ -4,11 +4,18 @@
   "version": "1.0.1",
   "minimum_chrome_version": "109",
   "description": "A Text-to-Speech extension that reads web pages aloud.",
+  "author": "realsanjeev",
+  "homepage_url": "https://bhandarisanjeev.com.np",
   "permissions": [
     "activeTab",
     "scripting",
     "storage",
     "offscreen"
+  ],
+  "optional_host_permissions": [
+    "http://*/",
+    "https://*/",
+    "file://*/*"
   ],
   "action": {
     "default_popup": "ui/popup.html",

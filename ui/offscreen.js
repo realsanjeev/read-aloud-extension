@@ -474,7 +474,6 @@ function speakCurrentSentence() {
 
     window.speechSynthesis.speak(utter);
 }
-
 function sendUpdate(sendResponse = null, extra = {}) {
     const state = {
         isPlaying: playerState.isPlaying,
@@ -484,6 +483,7 @@ function sendUpdate(sendResponse = null, extra = {}) {
         // Only send sentences if it's a direct response to a state request or specifically requested
         lineBreaks: playerState.lineBreaks,
         tabId: playerState.tabId,
+        tabUrl: playerState.tabUrl,
         ...extra
     };
 
