@@ -12,9 +12,10 @@
     "storage",
     "offscreen"
   ],
-  "host_permissions": [
-    "https://*/*",
-    "http://*/*"
+  "optional_host_permissions": [
+    "http://*/",
+    "https://*/",
+    "file://*/*"
   ],
   "action": {
     "default_popup": "ui/popup.html",

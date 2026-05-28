@@ -256,8 +256,49 @@ function showResumePrompt(savedIndex, text, tabId, tabUrl) {
 
 // --- Content Extraction ---
 
+/**
+ * Requests optional host permission for the given URL if not already granted.
+ * Returns true if permission is granted, false otherwise.
+ */
+async function requestHostPermission(url) {
+  const origin = new URL(url).origin + '/*';
+  return new Promise((resolve) => {
+    chrome.permissions.contains({ origins: [origin] }, (already) => {
+      if (already) return resolve(true);
+      chrome.permissions.request({ origins: [origin] }, (granted) => {
+        resolve(!!granted);
+      });
+    });
+  });
+}
+
 async function getPageContent(tab) {
-  if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:')) return null;
+  if (!tab || !tab.url) return null;
+
+  // Block pages where content scripts cannot be injected
+  if (
+    tab.url.startsWith('chrome://') ||
+    tab.url.startsWith('about:') ||
+    tab.url.startsWith('chrome-extension://')
+  ) {
+    // Special case: Chrome's built-in PDF viewer (chrome-extension://...?pdfUrl)
+    // Detect it by checking the query string for a PDF URL
+    if (tab.url.startsWith('chrome-extension://')) {
+      try {
+        const extUrl = new URL(tab.url);
+        // Chrome's native PDF viewer encodes the PDF URL as a query param or hash
+        const pdfUrl = extUrl.searchParams.get('') ||
+                       [...extUrl.searchParams.values()][0] ||
+                       decodeURIComponent(extUrl.hash.replace('#', ''));
+        if (pdfUrl && (pdfUrl.startsWith('http') || pdfUrl.startsWith('file://'))) {
+          const viewerUrl = chrome.runtime.getURL('ui/pdf-viewer.html') + '?url=' + encodeURIComponent(pdfUrl);
+          chrome.tabs.create({ url: viewerUrl });
+          return null;
+        }
+      } catch (e) { /* Not a PDF viewer tab */ }
+    }
+    return null;
+  }
 
   const url = new URL(tab.url);
   const pathname = url.pathname.toLowerCase();
@@ -268,20 +309,29 @@ async function getPageContent(tab) {
     return null;
   }
 
-  if (!pathname.match(/\.\w+$/)) {
-    try {
-      const headResp = await fetch(tab.url, { method: 'HEAD' });
-      const contentType = headResp.headers.get('Content-Type') || '';
-      if (contentType.includes('application/pdf')) {
-        const viewerUrl = chrome.runtime.getURL('ui/pdf-viewer.html') + '?url=' + encodeURIComponent(tab.url);
-        chrome.tabs.create({ url: viewerUrl });
-        return null;
-      }
-    } catch (e) {}
+  // Detect PDFs served without a .pdf extension (e.g. https://arxiv.org/pdf/2301.00018)
+  // Uses activeTab + scripting permissions only — no host permission needed
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => document.contentType
+    });
+    if (result?.result === 'application/pdf') {
+      const viewerUrl = chrome.runtime.getURL('ui/pdf-viewer.html') + '?url=' + encodeURIComponent(tab.url);
+      chrome.tabs.create({ url: viewerUrl });
+      return null;
+    }
+  } catch (e) {
+    // scripting.executeScript may fail on restricted pages — fall through
   }
 
   if (pathname.endsWith('.txt') || pathname.endsWith('.md')) {
     try {
+      const granted = await requestHostPermission(tab.url);
+      if (!granted) {
+        console.warn('Host permission denied for', tab.url);
+        return null;
+      }
       const resp = await fetch(tab.url);
       const text = await resp.text();
       if (pathname.endsWith('.md')) {
