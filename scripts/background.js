@@ -191,12 +191,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     // Forward player commands to offscreen
-    if (msg.type && (msg.type === 'PLAY' || msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE' || msg.type === 'DETECT_LANG' || msg.type === 'PING')) {
+    if (msg.type && (msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE' || msg.type === 'PING')) {
         if (msg._forwarded) return; // Prevent infinite recursion
 
         console.log("Background: Forwarding command to offscreen:", msg.type);
         ensureOffscreen().then(() => {
-            const expectsResponse = ['GET_STATE', 'DETECT_LANG', 'INIT', 'PING'].includes(msg.type);
+            const expectsResponse = ['GET_STATE', 'INIT', 'PING'].includes(msg.type);
 
             if (expectsResponse) {
                 chrome.runtime.sendMessage({ ...msg, _forwarded: true }, (response) => {
