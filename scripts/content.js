@@ -12,7 +12,15 @@ let shadowHost = null;
 let shadowRoot = null;
 let miniPlayer = null;
 let playerSentences = [];
+let playerLineBreaks = [];
 let currentSentenceText = "";
+let lastKnownIndex = 0;
+let wasEverActive = false;
+let closedByUser = false;
+let playerEnabled = false;
+let currentSettings = { rate: 1.0, pitch: 1.0, volume: 1.0 };
+
+const SPEEDS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
 /**
  * Safely send a message to the extension runtime.
@@ -60,8 +68,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     if (msg.type === 'TOGGLE_MINI_PLAYER') {
         if (msg.visible) {
+            closedByUser = false;
+            playerEnabled = true;
             ensureMiniPlayer();
         } else {
+            playerEnabled = false;
             hideMiniPlayer();
         }
         safeSendMessage({ type: 'GET_STATE' }, (response) => {
@@ -88,7 +99,7 @@ function extractContentFromPage() {
             if (article && article.content) {
                 const doc = new DOMParser().parseFromString(article.content, 'text/html');
                 const text = (doc.body.textContent || doc.body.innerText || '').trim();
-                if (text.length > 100) return text; // Use it if it seems substantial
+                if (text.length > 100) return text;
             }
         } catch (e) {
             console.error("[ReadAloud] Readability parsing failed:", e);
@@ -114,8 +125,24 @@ function extractContentFromPage() {
 
 // --- Floating Mini-Player ---
 
+function cycleSpeed(current, direction) {
+    const idx = SPEEDS.indexOf(current);
+    if (idx === -1) return SPEEDS[Math.floor(SPEEDS.length / 2)];
+    const next = idx + direction;
+    if (next < 0) return SPEEDS[0];
+    if (next >= SPEEDS.length) return SPEEDS[SPEEDS.length - 1];
+    return SPEEDS[next];
+}
+
+function updateSpeedDisplay() {
+    if (!miniPlayer) return;
+    const display = miniPlayer.querySelector('.mini-speed-display');
+    if (display) display.textContent = currentSettings.rate.toFixed(1) + 'x';
+}
+
 function ensureMiniPlayer() {
     if (miniPlayer) {
+        if (closedByUser) return;
         miniPlayer.classList.remove('is-hidden');
         return;
     }
@@ -135,28 +162,47 @@ function ensureMiniPlayer() {
     container.setAttribute('aria-label', 'Read aloud mini player');
 
     container.innerHTML = `
-        <button class="mini-btn mini-toggle" aria-label="Play or pause">
-            <svg class="mini-icon-play" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="5 3 19 12 5 21 5 3"></polygon>
-            </svg>
-            <svg class="mini-icon-pause hidden" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="6" y="4" width="4" height="16"></rect>
-                <rect x="14" y="4" width="4" height="16"></rect>
-            </svg>
-        </button>
-        <div class="mini-sentence" aria-live="polite" aria-atomic="true"></div>
-        <button class="mini-btn mini-next" aria-label="Next sentence">
-            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="5 4 15 12 5 20 5 4"></polygon>
-                <line x1="19" y1="5" x2="19" y2="19"></line>
-            </svg>
-        </button>
-        <button class="mini-btn mini-stop" aria-label="Stop">
-            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
-            </svg>
-        </button>
-        <button class="mini-close" aria-label="Close mini player">&times;</button>
+        <div class="mini-progress-container">
+            <div class="mini-progress-bar"></div>
+            <span class="mini-progress-text"></span>
+        </div>
+        <div class="mini-body">
+            <div class="mini-controls">
+                <button class="mini-btn mini-prev" aria-label="Previous sentence">
+                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="19 20 9 12 19 4 19 20"></polygon>
+                        <line x1="5" y1="19" x2="5" y2="5"></line>
+                    </svg>
+                </button>
+                <button class="mini-btn mini-toggle" aria-label="Play or pause">
+                    <svg class="mini-icon-play" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                    </svg>
+                    <svg class="mini-icon-pause hidden" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="6" y="4" width="4" height="16"></rect>
+                        <rect x="14" y="4" width="4" height="16"></rect>
+                    </svg>
+                </button>
+                <button class="mini-btn mini-next" aria-label="Next sentence">
+                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="5 4 15 12 5 20 5 4"></polygon>
+                        <line x1="19" y1="5" x2="19" y2="19"></line>
+                    </svg>
+                </button>
+                <button class="mini-btn mini-stop" aria-label="Stop">
+                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
+                    </svg>
+                </button>
+            </div>
+            <div class="mini-sentence" aria-live="polite" aria-atomic="true"></div>
+            <div class="mini-speed">
+                <button class="mini-btn mini-speed-down" aria-label="Decrease speed">−</button>
+                <span class="mini-speed-display">1.0x</span>
+                <button class="mini-btn mini-speed-up" aria-label="Increase speed">+</button>
+            </div>
+            <button class="mini-close" aria-label="Close mini player">&times;</button>
+        </div>
     `;
 
     // 4. Inject Isolated Styles
@@ -171,21 +217,19 @@ function ensureMiniPlayer() {
             position: fixed;
             bottom: 32px;
             right: 32px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
             background: rgba(30, 41, 59, 0.95);
             backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
             border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 20px;
-            padding: 10px 16px;
+            border-radius: 16px;
+            padding: 10px 16px 12px;
             box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
             font-family: system-ui, -apple-system, sans-serif;
             font-size: 14px;
             color: #f1f5f9;
             transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
-            max-width: 320px;
+            max-width: 380px;
+            min-width: 280px;
             line-height: 1.4;
             box-sizing: border-box;
             z-index: 2147483647;
@@ -198,16 +242,69 @@ function ensureMiniPlayer() {
             opacity: 0;
             pointer-events: none;
         }
-        .read-aloud-mini-player .mini-sentence {
+        .mini-progress-container {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+        .mini-progress-bar {
+            flex: 1;
+            height: 3px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 100px;
+            overflow: hidden;
+        }
+        .mini-progress-bar::after {
+            content: '';
+            display: block;
+            height: 100%;
+            width: var(--mini-progress, 0%);
+            background: linear-gradient(135deg, #10b981, #0891b2);
+            border-radius: 100px;
+            transition: width 0.3s ease;
+        }
+        .mini-progress-text {
+            font-size: 10px;
+            color: #94a3b8;
+            min-width: 32px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        .mini-body {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .mini-controls {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+        .mini-sentence {
             flex: 1;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
             font-weight: 500;
-            max-width: 140px;
+            max-width: 120px;
             color: #f1f5f9;
+            font-size: 13px;
         }
-        .read-aloud-mini-player .mini-btn {
+        .mini-speed {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            flex-shrink: 0;
+        }
+        .mini-speed-display {
+            font-size: 11px;
+            color: #94a3b8;
+            font-variant-numeric: tabular-nums;
+            min-width: 32px;
+            text-align: center;
+        }
+        .mini-btn {
             background: none;
             border: none;
             cursor: pointer;
@@ -215,36 +312,45 @@ function ensureMiniPlayer() {
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 6px;
-            border-radius: 10px;
+            padding: 5px;
+            border-radius: 8px;
             transition: all 0.2s;
-            opacity: 0.9;
+            opacity: 0.85;
+            flex-shrink: 0;
         }
-        .read-aloud-mini-player .mini-btn:hover:not(:disabled) {
+        .mini-btn:hover:not(:disabled) {
             background: rgba(16, 185, 129, 0.15);
             color: #34d399;
-            transform: translateY(-1px);
             opacity: 1;
         }
-        .read-aloud-mini-player .mini-btn:disabled {
+        .mini-btn:disabled {
             color: #64748b;
             cursor: not-allowed;
             opacity: 0.4;
         }
-        .read-aloud-mini-player .mini-btn.active {
+        .mini-btn.active {
             color: #34d399;
             filter: drop-shadow(0 0 4px rgba(16, 185, 129, 0.4));
         }
-        .read-aloud-mini-player .mini-close {
-            position: absolute;
-            top: -6px;
-            right: -6px;
-            width: 24px;
-            height: 24px;
+        .mini-speed-down, .mini-speed-up {
+            padding: 2px 4px;
+            font-size: 14px;
+            font-weight: 700;
+            color: #94a3b8;
+            line-height: 1;
+        }
+        .mini-speed-down:hover:not(:disabled), .mini-speed-up:hover:not(:disabled) {
+            color: #10b981;
+            background: rgba(16, 185, 129, 0.15);
+        }
+        .mini-close {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
             border-radius: 50%;
             background: #475569;
             color: white;
-            font-size: 16px;
+            font-size: 14px;
             font-weight: bold;
             line-height: 1;
             text-align: center;
@@ -254,18 +360,21 @@ function ensureMiniPlayer() {
             align-items: center;
             justify-content: center;
             padding: 0;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
             transition: all 0.2s;
+            margin-left: 2px;
         }
-        .read-aloud-mini-player .mini-close:hover {
+        .mini-close:hover {
             background: #ef4444;
             transform: scale(1.1);
         }
-        .read-aloud-mini-player .hidden {
+        .hidden {
             display: none !important;
         }
         @media (prefers-reduced-motion: reduce) {
             .read-aloud-mini-player {
+                transition: none;
+            }
+            .mini-progress-bar::after {
                 transition: none;
             }
         }
@@ -289,6 +398,10 @@ function ensureMiniPlayer() {
         e.stopPropagation();
         safeSendMessage({ type: 'TOGGLE_PLAY' });
     });
+    container.querySelector('.mini-prev').addEventListener('click', (e) => {
+        e.stopPropagation();
+        safeSendMessage({ type: 'PREV' });
+    });
     container.querySelector('.mini-next').addEventListener('click', (e) => {
         e.stopPropagation();
         safeSendMessage({ type: 'NEXT' });
@@ -296,11 +409,30 @@ function ensureMiniPlayer() {
     container.querySelector('.mini-stop').addEventListener('click', (e) => {
         e.stopPropagation();
         safeSendMessage({ type: 'STOP' });
-        hideMiniPlayer();
     });
     container.querySelector('.mini-close').addEventListener('click', (e) => {
         e.stopPropagation();
+        closedByUser = true;
+        safeSendMessage({ type: 'STOP' });
         hideMiniPlayer();
+    });
+    container.querySelector('.mini-speed-down').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const newRate = cycleSpeed(currentSettings.rate, -1);
+        if (newRate !== currentSettings.rate) {
+            currentSettings.rate = newRate;
+            updateSpeedDisplay();
+            safeSendMessage({ type: 'UPDATE_SETTINGS', settings: { rate: newRate } });
+        }
+    });
+    container.querySelector('.mini-speed-up').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const newRate = cycleSpeed(currentSettings.rate, 1);
+        if (newRate !== currentSettings.rate) {
+            currentSettings.rate = newRate;
+            updateSpeedDisplay();
+            safeSendMessage({ type: 'UPDATE_SETTINGS', settings: { rate: newRate } });
+        }
     });
 }
 
@@ -316,31 +448,57 @@ function updateMiniPlayer(state) {
     if (state.sentences && state.sentences.length > 0) {
         playerSentences = state.sentences;
     }
+    if (state.lineBreaks) {
+        playerLineBreaks = state.lineBreaks;
+    }
+    if (state.settings) {
+        currentSettings = { ...currentSettings, ...state.settings };
+        updateSpeedDisplay();
+    }
 
-    const isPlaying = state.isPlaying && !state.isPaused;
-    const isPaused = !state.isPlaying && state.isPaused;
-    const isActive = isPlaying || isPaused;
     const hasContent = playerSentences.length > 0;
+    const isActive = state.isPlaying || state.isPaused;
 
-    if (!isActive || !hasContent) {
-        hideMiniPlayer();
-        return;
+    if (!hasContent) return;
+    if (closedByUser) return;
+    if (!playerEnabled) return;
+
+    if (isActive) {
+        wasEverActive = true;
+        lastKnownIndex = state.currentIndex;
     }
 
     ensureMiniPlayer();
 
-    const sentence = playerSentences[state.currentIndex] || '';
+    const displayIndex = isActive ? state.currentIndex : (wasEverActive ? lastKnownIndex : state.currentIndex);
+    const sentence = playerSentences[displayIndex] || '';
+    const totalSentences = state.totalSentences || playerSentences.length;
+
+    // Update sentence text
     const sentenceEl = miniPlayer.querySelector('.mini-sentence');
     if (sentenceEl && sentence !== currentSentenceText) {
         sentenceEl.textContent = sentence;
+        sentenceEl.title = sentence;
         currentSentenceText = sentence;
     }
 
+    // Update progress bar
+    const progressBar = miniPlayer.querySelector('.mini-progress-bar');
+    const progressText = miniPlayer.querySelector('.mini-progress-text');
+    if (progressBar && totalSentences > 0) {
+        const pct = Math.min(((displayIndex + 1) / totalSentences) * 100, 100);
+        progressBar.style.setProperty('--mini-progress', pct + '%');
+    }
+    if (progressText && totalSentences > 0) {
+        progressText.textContent = `${displayIndex + 1}/${totalSentences}`;
+    }
+
+    // Update play/pause icon
     const toggleBtn = miniPlayer.querySelector('.mini-toggle');
     const playIcon = miniPlayer.querySelector('.mini-icon-play');
     const pauseIcon = miniPlayer.querySelector('.mini-icon-pause');
 
-    if (isPlaying) {
+    if (state.isPlaying && !state.isPaused) {
         playIcon.classList.add('hidden');
         pauseIcon.classList.remove('hidden');
         toggleBtn.classList.add('active');
@@ -350,10 +508,14 @@ function updateMiniPlayer(state) {
         toggleBtn.classList.remove('active');
     }
 
+    // Update prev/next buttons
+    const prevBtn = miniPlayer.querySelector('.mini-prev');
     const nextBtn = miniPlayer.querySelector('.mini-next');
-    if (nextBtn) {
-        nextBtn.disabled = state.currentIndex >= (playerSentences.length - 1);
-    }
+    if (prevBtn) prevBtn.disabled = displayIndex <= 0;
+    if (nextBtn) nextBtn.disabled = displayIndex >= (playerSentences.length - 1);
+
+    // Update speed display
+    updateSpeedDisplay();
 }
 
 } // end guard: window.__readAloudContentScriptLoaded

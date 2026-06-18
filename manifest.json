@@ -10,7 +10,8 @@
     "activeTab",
     "scripting",
     "storage",
-    "offscreen"
+    "offscreen",
+    "contextMenus"
   ],
   "optional_host_permissions": [
     "http://*/",
@@ -25,6 +26,10 @@
       "128": "assets/icons/icon-128.png"
     }
   },
+  "options_ui": {
+    "page": "ui/options.html",
+    "open_in_tab": true
+  },
   "background": {
     "service_worker": "scripts/background.js"
   },
@@ -37,6 +42,9 @@
     "extension_pages": "script-src 'self'; object-src 'self';"
   },
   "commands": {
+    "_execute_action": {
+      "description": "Open extension popup"
+    },
     "play_stop": {
       "suggested_key": {
         "default": "Alt+O"

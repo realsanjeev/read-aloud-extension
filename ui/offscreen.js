@@ -363,6 +363,7 @@ function speakCurrentSentence() {
         if (playerState.isPlaying && !playerState.isPaused) {
             playerState.currentIndex++;
             if (playerState.currentIndex < playerState.sentences.length) {
+                savePosition();
                 speakCurrentSentence();
             } else {
                 stop();
@@ -393,10 +394,14 @@ function sendUpdate(sendResponse = null, extra = {}) {
         isPaused: playerState.isPaused,
         currentIndex: playerState.currentIndex,
         totalSentences: playerState.sentences.length,
-        // Only send sentences if it's a direct response to a state request or specifically requested
         lineBreaks: playerState.lineBreaks,
         tabId: playerState.tabId,
         tabUrl: playerState.tabUrl,
+        settings: {
+            rate: playerState.settings.rate,
+            pitch: playerState.settings.pitch,
+            volume: playerState.settings.volume
+        },
         ...extra
     };
 

@@ -35,6 +35,7 @@ const elements = {
   volumeRange: document.getElementById('volumeRange'),
   volumeValue: document.getElementById('volumeValue'),
   highlightModeSelect: document.getElementById('highlightModeSelect'),
+  ratePresets: document.getElementById('ratePresets'),
   chkAutoScroll: document.getElementById('chkAutoScroll'),
   chkMiniPlayer: document.getElementById('chkMiniPlayer'),
 };
@@ -112,21 +113,38 @@ function handleUpdateUI(state) {
 
 // --- Export Functions ---
 
+function buildText() {
+  if (uiState.sentences.length === 0) return '';
+  if (!uiState.lineBreaks || uiState.lineBreaks.length === 0) {
+    return uiState.sentences.join(' ');
+  }
+  const parts = [];
+  let paraStart = 0;
+  const breaks = [...uiState.lineBreaks, uiState.sentences.length];
+  for (const breakIdx of breaks) {
+    parts.push(uiState.sentences.slice(paraStart, breakIdx).join(' '));
+    paraStart = breakIdx;
+  }
+  return parts.join('\n\n');
+}
+
 async function copyText() {
-  if (uiState.sentences.length === 0) return;
-  const text = uiState.sentences.join(' ');
+  const text = buildText();
+  if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
     elements.btnCopy.classList.add('success');
     setTimeout(() => elements.btnCopy.classList.remove('success'), 2000);
   } catch (err) {
     console.error('Failed to copy text:', err);
+    elements.btnCopy.classList.add('copy-error');
+    setTimeout(() => elements.btnCopy.classList.remove('copy-error'), 2000);
   }
 }
 
 function downloadText() {
-  if (uiState.sentences.length === 0) return;
-  const text = uiState.sentences.join(' ');
+  const text = buildText();
+  if (!text) return;
   const blob = new Blob([text], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -178,6 +196,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     return false;
   });
 
+  // Issue #4: Seekable progress bar
+  const progressContainer = document.getElementById('progressContainer');
+  if (progressContainer) {
+    progressContainer.addEventListener('click', (e) => {
+      if (uiState.sentences.length === 0) return;
+      const rect = progressContainer.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const index = Math.round(pct * (uiState.sentences.length - 1));
+      shared.sendCommand('JUMP', { index });
+    });
+  }
+
   const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   // 1. Check if background already has a state (playback in progress)
@@ -196,6 +226,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (uiState.settings.miniPlayer) updateMiniPlayer(true);
     } else {
       // 2. Fresh start: extract content
+      elements.textContent.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Extracting content…</p></div>';
       try {
         const text = await getPageContent(currentTab);
         if (text) {
@@ -211,15 +242,20 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
           if (uiState.settings.miniPlayer) updateMiniPlayer(true);
         } else {
-          elements.textContent.innerHTML = '<p class="placeholder-text">No readable text found.</p>';
+          elements.textContent.innerHTML = '<p class="placeholder-text">No readable text found on this page.</p>';
         }
       } catch (err) {
         console.error("Extraction failed:", err);
-        const p = document.createElement('p');
-        p.className = 'error';
-        p.textContent = `Error: ${err.message}`;
-        elements.textContent.innerHTML = '';
-        elements.textContent.appendChild(p);
+        elements.textContent.innerHTML = `
+            <div class="error-state">
+              <svg class="error-icon" viewBox="0 0 24 24" width="36" height="36" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+              </svg>
+              <p>Could not extract content.<br><small>${err.message}</small></p>
+              <button class="retry-btn" onclick="location.reload()">Try Again</button>
+            </div>`;
       }
     }
   });
@@ -244,14 +280,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 function showResumePrompt(savedIndex, text, tabId, tabUrl) {
   elements.resumePrompt.classList.remove('hidden');
-  elements.btnResumeYes.onclick = () => {
+
+  const dismiss = (index) => {
+    clearTimeout(autoDismiss);
     elements.resumePrompt.classList.add('hidden');
-    shared.sendCommand('INIT', { text, index: savedIndex, settings: uiState.settings, tabId, tabUrl });
+    shared.sendCommand('INIT', { text, index, settings: uiState.settings, tabId, tabUrl });
   };
-  elements.btnResumeNo.onclick = () => {
-    elements.resumePrompt.classList.add('hidden');
-    shared.sendCommand('INIT', { text, index: 0, settings: uiState.settings, tabId, tabUrl });
-  };
+
+  // Auto-dismiss after 8 s — defaults to starting fresh
+  const autoDismiss = setTimeout(() => dismiss(0), 8000);
+
+  elements.btnResumeYes.onclick = () => dismiss(savedIndex);
+  elements.btnResumeNo.onclick = () => dismiss(0);
 }
 
 // --- Content Extraction ---

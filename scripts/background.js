@@ -5,6 +5,79 @@ let offscreenClosePromise = null;
 let offscreenClosing = false;
 const OFFSCREEN_DOCUMENT_PATH = chrome.runtime.getURL('ui/offscreen.html');
 
+// --- Context Menu ---
+chrome.runtime.onInstalled.addListener(() => {
+    chrome.contextMenus.create({
+        id: 'read-aloud',
+        title: 'Read Aloud',
+        contexts: ['page', 'selection']
+    });
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+    if (info.menuItemId !== 'read-aloud') return;
+    if (!tab || !tab.id || !tab.url) return;
+
+    const blocked = tab.url.startsWith('chrome://') ||
+        tab.url.startsWith('about:') ||
+        tab.url.startsWith('chrome-extension://');
+    if (blocked) return;
+
+    try {
+        await ensureOffscreen();
+
+        await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ['lib/Readability.js', 'scripts/content.js']
+        });
+
+        const response = await new Promise((resolve) => {
+            chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_CONTENT' }, (res) => {
+                if (chrome.runtime.lastError) resolve({ error: chrome.runtime.lastError.message });
+                else resolve(res);
+            });
+        });
+
+        const text = response ? response.result : null;
+        if (!text) return;
+
+        // Load settings
+        const data = await chrome.storage.sync.get([
+            'voiceName', 'rate', 'pitch', 'volume', 'highlightMode', 'miniPlayer'
+        ]);
+
+        const settings = {
+            voiceName: data.voiceName || null,
+            rate: parseFloat(data.rate) || 1.0,
+            pitch: parseFloat(data.pitch) || 1.0,
+            volume: parseFloat(data.volume) || 1.0,
+            highlightMode: data.highlightMode || 'sentence'
+        };
+
+        await new Promise((resolve) => {
+            chrome.runtime.sendMessage({
+                type: 'INIT',
+                _forwarded: true,
+                text,
+                index: 0,
+                settings,
+                tabId: tab.id,
+                tabUrl: tab.url,
+                autoPlay: true
+            }, (res) => resolve(res));
+        });
+
+        // Show mini-player
+        try {
+            await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_MINI_PLAYER', visible: true });
+        } catch (e) {
+            // Content script not available
+        }
+    } catch (e) {
+        console.error("Context menu Read Aloud failed:", e);
+    }
+});
+
 /**
  * Checks if the offscreen document is already created.
  * Uses chrome.runtime.getContexts (Chrome 116+) or self.clients.matchAll() as a fallback (Chrome 109-115).
