@@ -3,3 +3,4 @@ graphify-out
 .playwright-mcp
 .agents
 *.zip
+dist

@@ -612,3 +612,7 @@ function updateMiniPlayer(state) {
 }
 
 } // end guard: window.__readAloudContentScriptLoaded
+
+// Explicit undefined return so Firefox scripting.executeScript can
+// serialize the result (non-structured-clonable values cause an error).
+void 0;

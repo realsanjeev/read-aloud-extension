@@ -51,6 +51,7 @@ let voiceRetryRef = { count: 0 };
 // --- Voice Auto-Selection ---
 async function autoSelectVoice(text) {
   if (uiState.settings.voiceName || voices.length === 0) return;
+  if (!chrome.i18n.detectLanguage) return;
   try {
     const result = await new Promise((resolve, reject) => {
       chrome.i18n.detectLanguage(text, (res) => {
@@ -76,7 +77,7 @@ async function autoSelectVoice(text) {
 // --- Mini-Player Toggle ---
 async function updateMiniPlayer(show) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.id || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:')) return;
+  if (!tab || !tab.id || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('moz-extension:')) return;
 
   if (show) {
     try {
@@ -156,9 +157,7 @@ function downloadText() {
     
     a.href = url;
     a.download = filename;
-    document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   });
 }
@@ -262,8 +261,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <line x1="12" y1="16" x2="12.01" y2="16"></line>
               </svg>
               <p>Could not extract content.<br><small>${err.message}</small></p>
-              <button class="retry-btn" onclick="location.reload()">Try Again</button>
+              <button id="retry-extract-btn" class="retry-btn">Try Again</button>
             </div>`;
+      }
+      
+      const retryBtn = document.getElementById('retry-extract-btn');
+      if (retryBtn) {
+          retryBtn.addEventListener('click', () => location.reload());
       }
     }
   });
@@ -324,14 +328,10 @@ async function getPageContent(tab) {
   if (!tab || !tab.url) return null;
 
   // Block pages where content scripts cannot be injected
-  if (
-    tab.url.startsWith('chrome://') ||
-    tab.url.startsWith('about:') ||
-    tab.url.startsWith('chrome-extension://')
-  ) {
+  if (/^(chrome|about|chrome-extension|moz-extension):/.test(tab.url)) {
     // Special case: Chrome's built-in PDF viewer (chrome-extension://...?pdfUrl)
     // Detect it by checking the query string for a PDF URL
-    if (tab.url.startsWith('chrome-extension://')) {
+    if (/^(chrome-extension|moz-extension):\/\//.test(tab.url)) {
       try {
         const extUrl = new URL(tab.url);
         // Chrome's native PDF viewer encodes the PDF URL as a query param or hash
@@ -410,17 +410,23 @@ async function getPageContent(tab) {
     });
   };
 
-  // 1. Try to send message first
+  // 1. Try to send message first (content script may already be injected)
   let response = await trySendMessage();
 
-  // 2. If it failed due to missing content script connection, inject and retry
+  // 2. If it failed due to missing content script, inject and retry
   if (response && response.error) {
     console.log("Popup: Content script not detected, injecting...");
     try {
       await injectContentScripts(tab.id);
-      // Small pause for initialization
-      await new Promise(r => setTimeout(r, 100));
+      // Give the content script time to register its message listener
+      await new Promise(r => setTimeout(r, 300));
       response = await trySendMessage();
+
+      // 3. If still failing, wait longer and retry once more (Firefox can be slower)
+      if (response && response.error) {
+        await new Promise(r => setTimeout(r, 500));
+        response = await trySendMessage();
+      }
     } catch (injectErr) {
       console.error("Popup: Script injection and retry failed:", injectErr);
     }
@@ -429,14 +435,28 @@ async function getPageContent(tab) {
   if (response && response.result) {
     return response.result;
   }
-  throw new Error(response ? response.error || "Extraction failed." : "Extraction failed.");
+  
+  let errMsg = response ? response.error || "Extraction failed." : "Extraction failed.";
+  if (/receiving end does not exist/i.test(errMsg)) {
+      errMsg = "Extension was updated or lost connection. Please refresh this webpage and try again.";
+  }
+  throw new Error(errMsg);
 }
 
 async function injectContentScripts(tabId) {
   try {
+    // Inject files sequentially — Firefox does not support multi-file injection
+    // in a single executeScript call reliably.
+    //
+    // Use absolute paths (leading '/') so Firefox resolves them from the extension
+    // root instead of relative to the popup page (ui/popup.js → ui/).
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ['lib/Readability.js', 'scripts/content.js']
+      files: ['/lib/Readability.js']
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['/scripts/content.js']
     });
   } catch (e) {
     console.error("Popup: Script injection failed:", e);

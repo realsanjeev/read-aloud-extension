@@ -40,16 +40,14 @@ function cancelSpeech() {
 
 // Settings are initialized via INIT and UPDATE_SETTINGS messages from the popup
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+function handleMessage(msg, sender, sendResponse) {
     // Ignore direct broadcasts from the popup; only accept commands proxied by the background service worker
-    if (msg.type && (msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE' || msg.type === 'PING') && !msg._forwarded) {
+    if (msg.type && (msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE') && !msg._forwarded) {
         return;
     }
 
     switch (msg.type) {
-        case 'PING':
-            sendResponse({ status: 'pong' });
-            break;
+
         case 'INIT':
             console.log("Offscreen: INIT received, text length:", msg.text ? msg.text.length : 0);
             initPlayer(msg.text, msg.index || 0, msg.settings, msg.autoPlay || false, msg.tabId, msg.tabUrl || null);
@@ -64,9 +62,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             sendResponse({ status: 'ok' });
             break;
         case 'STOP':
-            stop();
-            sendResponse({ status: 'ok' });
-            break;
+            stop().then(() => sendResponse({ status: 'ok' }));
+            return true;
         case 'NEXT':
             next();
             sendResponse({ status: 'ok' });
@@ -103,6 +100,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'GET_STATE':
             sendUpdate(sendResponse);
             return true;
+    }
+}
+
+chrome.runtime.onMessage.addListener(handleMessage);
+
+// Firefox compatibility: listen to window messages from the parent background script
+window.addEventListener('message', (event) => {
+    const msg = event.data;
+    if (msg && msg.type) {
+        const sendResponse = (response) => {
+            if (msg._messageId) {
+                window.parent.postMessage({
+                    responseTo: msg._messageId,
+                    response: response
+                }, '*');
+            }
+        };
+        handleMessage(msg, {}, sendResponse);
     }
 });
 
@@ -191,6 +206,7 @@ function play() {
     playerState.isPaused = false;
     sendUpdate();
     speakCurrentSentence();
+    startAutoPersist();
 }
 
 function pause() {
@@ -219,17 +235,12 @@ function togglePause() {
 
 async function stop() {
     await savePosition();
+    clearInterval(autoPersistIntervalId);
     playerState.isPlaying = false;
     playerState.isPaused = false;
     playerState.currentIndex = 0;
     cancelSpeech();
     sendUpdate();
-    // Signal background that state is fully persisted and it's safe to close
-    chrome.runtime.sendMessage({ type: 'STOP_COMPLETE' }, () => {
-        if (chrome.runtime.lastError) {
-            console.debug("Offscreen: STOP_COMPLETE had no receivers:", chrome.runtime.lastError.message);
-        }
-    });
 }
 
 function next() {
@@ -498,13 +509,21 @@ function testVoice() {
 
 
 // Auto-persist position periodically while playing
-const autoPersistIntervalId = setInterval(() => {
-    if (playerState.isPlaying && !playerState.isPaused) {
-        savePosition();
-    }
-}, 5000);
+let autoPersistIntervalId = null;
 
-// Clean up the interval when the offscreen document is being closed
-window.addEventListener('beforeunload', () => {
-    clearInterval(autoPersistIntervalId);
+function startAutoPersist() {
+    if (autoPersistIntervalId !== null) return;
+    autoPersistIntervalId = setInterval(() => {
+        if (playerState.isPlaying && !playerState.isPaused) {
+            savePosition();
+        }
+    }, 5000);
+}
+
+// Cleanup on page hide/unload
+addEventListener('pagehide', () => {
+    if (autoPersistIntervalId !== null) {
+        clearInterval(autoPersistIntervalId);
+        autoPersistIntervalId = null;
+    }
 });

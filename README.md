@@ -19,11 +19,15 @@ A premium Text-to-Speech (TTS) Chrome Extension that automatically detects and r
 
 ## Installation
 
+**Official Stores:**
+- [Available on Chrome Web Store](https://chromewebstore.google.com/detail/read-aloud-extension/albdidadjkmkoieokamkkdhpidmjgpea)
+- [Available on Firefox Add-ons](#) *(Coming soon)*
+
+**Manual Installation (Developer Mode):**
 1.  Clone or download this repository.
-2.  Open Chrome and go to `chrome://extensions`.
-3.  Enable **Developer mode** (top right toggle).
-4.  Click **Load unpacked**.
-5.  Select the extension directory.
+2.  Run `./build.sh` to generate the extension packages.
+3.  **Chrome**: Go to `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the `dist/chrome` directory.
+4.  **Firefox**: Go to `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on**, and select the `manifest.json` inside the `dist/firefox` directory.
 
 ## Usage
 

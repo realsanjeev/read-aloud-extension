@@ -232,25 +232,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   if (pdfUrl.startsWith('file://')) {
-    chrome.extension.isAllowedFileSchemeAccess(async (isAllowed) => {
-      if (!isAllowed) {
-        console.warn("Extension does not have access to file URLs.");
-        elements.textContent.innerHTML = `
-          <div style="padding: 20px; text-align: center;">
-            <p class="error" style="font-weight: bold; margin-bottom: 12px; color: #ef4444;">Local PDF URL Blocked by Chrome</p>
-            <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 20px; line-height: 1.6;">
-              Chrome extensions require explicit permission to read local files directly.
-            </p>
-            <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 24px; line-height: 1.6;">
-              Please drag and drop your local PDF below to read it instantly, or go to <strong style="color: var(--primary-color)">chrome://extensions</strong>, find "Read Aloud Extension", and check "Allow access to file URLs".
-            </p>
-          </div>
-        `;
-        elements.dropZone.classList.remove('hidden');
-      } else {
-        await loadPdfFromSource(pdfUrl);
-      }
-    });
+    if (typeof chrome.extension !== 'undefined' && chrome.extension.isAllowedFileSchemeAccess) {
+      chrome.extension.isAllowedFileSchemeAccess(async (isAllowed) => {
+        if (!isAllowed) {
+          console.warn("Extension does not have access to file URLs.");
+          elements.textContent.innerHTML = `
+            <div style="padding: 20px; text-align: center;">
+              <p class="error" style="font-weight: bold; margin-bottom: 12px; color: #ef4444;">Local PDF URL Blocked by Chrome</p>
+              <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 20px; line-height: 1.6;">
+                Chrome extensions require explicit permission to read local files directly.
+              </p>
+              <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 24px; line-height: 1.6;">
+                Please drag and drop your local PDF below to read it instantly, or go to <strong style="color: var(--primary-color)">chrome://extensions</strong>, find "Read Aloud Extension", and check "Allow access to file URLs".
+              </p>
+            </div>
+          `;
+          elements.dropZone.classList.remove('hidden');
+        } else {
+          await loadPdfFromSource(pdfUrl);
+        }
+      });
+    } else {
+      await loadPdfFromSource(pdfUrl);
+    }
   } else {
     await loadPdfFromSource(pdfUrl);
   }
