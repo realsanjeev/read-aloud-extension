@@ -197,12 +197,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     // Internal background commands
-    if (msg.type === 'ENSURE_OFFSCREEN') {
-        ensureOffscreen()
-            .then(() => sendResponse({ status: 'ok' }))
-            .catch(err => sendResponse({ status: 'error', message: err.message }));
-        return true;
-    }
+
 
     if (msg.type === 'FETCH_PDF' && msg.url) {
         const origin = new URL(msg.url).origin + '/*';

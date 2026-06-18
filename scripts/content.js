@@ -386,6 +386,99 @@ function ensureMiniPlayer() {
     
     miniPlayer = container;
 
+    // --- Dragging Logic ---
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let initialLeft = 0;
+    let initialTop = 0;
+
+    // Restore position if saved
+    chrome.storage.local.get(['miniPlayerPos'], (result) => {
+        if (result.miniPlayerPos) {
+            const { left, top } = result.miniPlayerPos;
+            container.style.bottom = 'auto';
+            container.style.right = 'auto';
+            container.style.left = left;
+            container.style.top = top;
+        }
+    });
+
+    const startDrag = (e) => {
+        // Prevent dragging if clicking a button or progress bar
+        if (e.target.closest && (e.target.closest('button') || e.target.closest('.mini-progress-container'))) {
+            return;
+        }
+        
+        const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
+        const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
+        
+        isDragging = true;
+        dragStartX = clientX;
+        dragStartY = clientY;
+        
+        const rect = container.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
+        
+        // Remove bottom/right constraints so left/top take over seamlessly
+        container.style.bottom = 'auto';
+        container.style.right = 'auto';
+        container.style.left = `${initialLeft}px`;
+        container.style.top = `${initialTop}px`;
+        container.style.transition = 'none'; // Disable transition for instant drag
+    };
+
+    const doDrag = (e) => {
+        if (!isDragging) return;
+        if (e.type === 'touchmove') {
+            e.preventDefault(); // Prevent scrolling while dragging
+        }
+        
+        const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
+        const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
+        
+        const deltaX = clientX - dragStartX;
+        const deltaY = clientY - dragStartY;
+        
+        let newLeft = initialLeft + deltaX;
+        let newTop = initialTop + deltaY;
+        
+        // Keep inside viewport bounds
+        const rect = container.getBoundingClientRect();
+        const maxLeft = window.innerWidth - rect.width;
+        const maxTop = window.innerHeight - rect.height;
+        
+        newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+        newTop = Math.max(0, Math.min(newTop, maxTop));
+        
+        container.style.left = `${newLeft}px`;
+        container.style.top = `${newTop}px`;
+    };
+
+    const stopDrag = () => {
+        if (!isDragging) return;
+        isDragging = false;
+        container.style.transition = ''; // Restore transition
+        
+        // Save new position
+        chrome.storage.local.set({
+            miniPlayerPos: {
+                left: container.style.left,
+                top: container.style.top
+            }
+        });
+    };
+
+    container.addEventListener('mousedown', startDrag);
+    window.addEventListener('mousemove', doDrag);
+    window.addEventListener('mouseup', stopDrag);
+
+    container.addEventListener('touchstart', startDrag, { passive: false });
+    window.addEventListener('touchmove', doDrag, { passive: false });
+    window.addEventListener('touchend', stopDrag);
+    // --- End Dragging Logic ---
+
     // Request current state
     safeSendMessage({ type: 'GET_STATE' }, (response) => {
         if (response && response.state) {

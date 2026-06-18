@@ -162,8 +162,11 @@ export function handleUpdateUI(uiState, state, callbacks) {
     uiState.sentences = state.sentences;
   }
 
-  const { sentences, ...rest } = state;
+  const { sentences, settings: stateSettings, ...rest } = state;
   Object.assign(uiState, rest);
+  if (stateSettings) {
+    Object.assign(uiState.settings, stateSettings);
+  }
 
   if (needsRerender && callbacks.renderSentences) {
     callbacks.renderSentences();
@@ -176,6 +179,7 @@ export function handleUpdateUI(uiState, state, callbacks) {
   }
 
   if (callbacks.togglePlayIcon) callbacks.togglePlayIcon(uiState.isPlaying && !uiState.isPaused);
+  if (callbacks.updatePlayingClass) callbacks.updatePlayingClass();
   if (callbacks.updateProgress) callbacks.updateProgress();
   if (callbacks.updatePlayButtonState) callbacks.updatePlayButtonState();
 }
@@ -512,6 +516,9 @@ export function createHandleUpdateUICallbacks(uiState, elements, extraCallbacks 
     togglePlayIcon: (active) => togglePlayIcon(active, elements.iconPlay, elements.iconPause),
     updateProgress: () => updateProgress(uiState, elements.progressBar),
     updatePlayButtonState: () => setControlsEnabled(elements, uiState.sentences.length > 0),
+    updatePlayingClass: () => {
+      if (elements.textContent) elements.textContent.classList.toggle('is-playing', uiState.isPlaying && !uiState.isPaused);
+    },
     ...extraCallbacks
   };
 }

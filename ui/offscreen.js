@@ -1,5 +1,4 @@
 // offscreen.js - Text-to-Speech Engine
-import { hashStr } from './utils.js';
 
 let playerState = {
     sentences: [],
@@ -426,7 +425,7 @@ function savePosition() {
     if (!playerState.tabUrl || playerState.sentences.length === 0) return Promise.resolve();
     // Guard against extension context being torn down during auto-persist
     if (!chrome.storage) return Promise.resolve();
-    const key = 'pos_' + hashStr(playerState.tabUrl);
+    const key = 'pos_' + playerState.tabUrl;
     return new Promise((resolve) => {
         chrome.storage.local.set({
             [key]: {
