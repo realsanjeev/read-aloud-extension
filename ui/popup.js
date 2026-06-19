@@ -172,7 +172,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   shared.applyTheme(uiState.settings.theme, elements.iconTheme);
   
   // Set up voice selection using UI elements
-  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef);
+  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef, (v) => {
+    voices = v;
+  });
 
   if (elements.btnCopy) elements.btnCopy.onclick = copyText;
   if (elements.btnDownload) elements.btnDownload.onclick = downloadText;
@@ -237,6 +239,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             showResumePrompt(saved.index, text, currentTab.id, currentTab.url);
           } else {
             const autoPlay = isDifferentPage && wasPlaying;
+            if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
+              uiState.settings.voiceName = elements.voiceSelect.value;
+              shared.saveSettings(uiState);
+            }
             shared.sendCommand('INIT', { text, index: 0, settings: uiState.settings, tabId: currentTab.id, tabUrl: currentTab.url, autoPlay });
           }
           if (uiState.settings.miniPlayer) updateMiniPlayer(true);
@@ -296,6 +302,10 @@ function showResumePrompt(savedIndex, text, tabId, tabUrl) {
   const dismiss = (index) => {
     clearTimeout(autoDismiss);
     elements.resumePrompt.classList.add('hidden');
+    if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
+      uiState.settings.voiceName = elements.voiceSelect.value;
+      shared.saveSettings(uiState);
+    }
     shared.sendCommand('INIT', { text, index, settings: uiState.settings, tabId, tabUrl });
   };
 

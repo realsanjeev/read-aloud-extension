@@ -82,6 +82,10 @@ async function handleLocalFile(file) {
       pdfUrl = `file_upload://${file.name}`;
       const saved = await getSavedPosition(pdfUrl);
       const index = saved && saved.index > 0 ? saved.index : 0;
+      if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
+        uiState.settings.voiceName = elements.voiceSelect.value;
+        shared.saveSettings(uiState);
+      }
       shared.sendCommand('INIT', { text, index, settings: uiState.settings, tabUrl: pdfUrl });
       updatePlayButtonState();
     } else {
@@ -110,6 +114,10 @@ async function loadPdfFromSource(sourceUrl) {
       contentReady = true;
       const saved = await getSavedPosition(sourceUrl);
       const index = saved && saved.index > 0 ? saved.index : 0;
+      if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
+        uiState.settings.voiceName = elements.voiceSelect.value;
+        shared.saveSettings(uiState);
+      }
       shared.sendCommand('INIT', { text, index, settings: uiState.settings, tabUrl: sourceUrl });
       updatePlayButtonState();
     } else {
@@ -157,7 +165,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   shared.setControlsEnabled(elements, false);
   await shared.loadSharedSettings(uiState, elements);
   shared.applyTheme(uiState.settings.theme, elements.iconTheme);
-  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef);
+  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef, (v) => {
+    voices = v;
+  });
 
   // Wire up settings panel event listeners
   shared.wireSettingsListeners(uiState, elements, {

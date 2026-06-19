@@ -78,7 +78,7 @@ export async function loadSharedSettings(uiState, elements) {
   if (elements.chkMiniPlayer) elements.chkMiniPlayer.checked = uiState.settings.miniPlayer;
 }
 
-export function setupVoiceSelection(uiState, elements, voiceRetryRef) {
+export function setupVoiceSelection(uiState, elements, voiceRetryRef, onVoicesChanged = null) {
   const updateVoices = () => {
     const voices = window.speechSynthesis.getVoices();
     if (voices.length === 0) {
@@ -89,6 +89,7 @@ export function setupVoiceSelection(uiState, elements, voiceRetryRef) {
         if (elements.voiceError) elements.voiceError.classList.remove('hidden');
         if (elements.voiceSelect) elements.voiceSelect.innerHTML = '<option value="">No voices available</option>';
       }
+      if (onVoicesChanged) onVoicesChanged(voices);
       return voices;
     }
     if (elements.voiceError) elements.voiceError.classList.add('hidden');
@@ -142,6 +143,7 @@ export function setupVoiceSelection(uiState, elements, voiceRetryRef) {
         elements.voiceSelect.value = uiState.settings.voiceName;
       }
     }
+    if (onVoicesChanged) onVoicesChanged(voices);
     return voices;
   };
 
@@ -445,7 +447,14 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
   }
 
   if (elements.btnTestVoice) {
-    elements.btnTestVoice.onclick = () => sendCommand('TEST');
+    elements.btnTestVoice.onclick = () => {
+      if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
+        uiState.settings.voiceName = elements.voiceSelect.value;
+        saveSettings(uiState);
+        sendSettings(uiState);
+      }
+      sendCommand('TEST');
+    };
   }
 
   if (elements.btnReset) {
@@ -480,6 +489,11 @@ export function wirePlayerControls(uiState, elements, playGuard = null) {
   if (elements.btnPlay) {
     elements.btnPlay.onclick = () => {
       if (playGuard && playGuard()) return;
+      if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
+        uiState.settings.voiceName = elements.voiceSelect.value;
+        saveSettings(uiState);
+        sendSettings(uiState);
+      }
       sendCommand('TOGGLE_PLAY');
     };
   }
