@@ -23,6 +23,15 @@ let voiceRetryCount = 0;
 const MAX_VOICE_RETRIES = 20;
 let isSpeaking = false;
 
+// Firefox detection: in Firefox the offscreen page runs as an iframe inside
+// the background page (window.parent !== window). On Chrome it's standalone.
+const isFirefox = (window.parent !== window);
+
+// Firefox-specific timing constants (ms)
+const FIREFOX_POST_CANCEL_DELAY = 50;     // delay after cancel() before speak()
+const FIREFOX_INTER_UTTERANCE_DELAY = 80;  // gap between consecutive sentences
+const FIREFOX_ERROR_RETRY_DELAY = 350;     // retry delay after TTS error
+
 /**
  * Safely cancels any active SpeechSynthesis utterance and resets lock variables.
  * Clears callbacks to prevent recursive event firing during cancellation.
@@ -127,7 +136,15 @@ window.addEventListener('message', (event) => {
 function tokenizeSentences(text) {
     if (!text || text.length === 0) return { sentences: [], lineBreaks: [] };
 
-    const segmenter = new Intl.Segmenter(undefined, { granularity: 'sentence' });
+    let segmenter = null;
+    try {
+        if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+            segmenter = new Intl.Segmenter(undefined, { granularity: 'sentence' });
+        }
+    } catch (e) {
+        console.warn("Intl.Segmenter not supported or failed to initialize, using regex fallback:", e);
+    }
+
     const sentences = [];
     const lineBreaks = [];
     const lines = text.split(/\n+/);
@@ -140,11 +157,23 @@ function tokenizeSentences(text) {
             lineBreaks.push(sentences.length);
         }
 
-        for (const segment of segmenter.segment(trimmedLine)) {
-            const s = segment.segment.trim();
-            if (s.length > 0) {
-                sentences.push(s);
+        if (segmenter) {
+            for (const segment of segmenter.segment(trimmedLine)) {
+                const s = segment.segment.trim();
+                if (s.length > 0) {
+                    sentences.push(s);
+                }
             }
+        } else {
+            // Regex fallback for older browsers (Firefox < 125)
+            // Splitting by typical sentence boundaries (. ! ?) followed by whitespace
+            const segments = trimmedLine.split(/(?<=[.!?])\s+/);
+            segments.forEach(segment => {
+                const s = segment.trim();
+                if (s.length > 0) {
+                    sentences.push(s);
+                }
+            });
         }
     });
 
@@ -374,7 +403,13 @@ function speakCurrentSentence() {
             playerState.currentIndex++;
             if (playerState.currentIndex < playerState.sentences.length) {
                 savePosition();
-                speakCurrentSentence();
+                // Firefox needs a brief gap between utterances to avoid
+                // clipped beginnings, audio pops, and skipped sentences
+                if (isFirefox) {
+                    setTimeout(speakCurrentSentence, FIREFOX_INTER_UTTERANCE_DELAY);
+                } else {
+                    speakCurrentSentence();
+                }
             } else {
                 stop();
             }
@@ -391,12 +426,25 @@ function speakCurrentSentence() {
                     playerState.currentIndex++;
                     errorRetryCount = 0;
                 }
-                setTimeout(speakCurrentSentence, 100);
+                // Firefox's speech engine needs longer recovery time
+                const retryDelay = isFirefox ? FIREFOX_ERROR_RETRY_DELAY : 100;
+                setTimeout(speakCurrentSentence, retryDelay);
             }
         }
     };
 
-    window.speechSynthesis.speak(utter);
+    // On Firefox, delay speak() after cancel() to prevent overlapping/garbled audio
+    if (isFirefox) {
+        setTimeout(() => {
+            if (playerState.isPlaying && !playerState.isPaused) {
+                window.speechSynthesis.speak(utter);
+            } else {
+                isSpeaking = false;
+            }
+        }, FIREFOX_POST_CANCEL_DELAY);
+    } else {
+        window.speechSynthesis.speak(utter);
+    }
 }
 function sendUpdate(sendResponse = null, extra = {}) {
     const state = {

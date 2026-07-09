@@ -3,6 +3,12 @@ import { debounce } from './utils.js';
 
 export const MAX_VOICE_RETRIES = 20;
 
+export function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.appendChild(document.createTextNode(str));
+  return div.innerHTML;
+}
+
 export function createBaseState() {
   return {
     sentences: [],

@@ -93,7 +93,9 @@ async function handleLocalFile(file) {
     }
   } catch (err) {
     console.error("Local PDF extraction failed:", err);
-    elements.textContent.innerHTML = `<p class="error">Error extracting PDF: ${err.message}</p>`;
+    elements.textContent.innerHTML = '<p class="error">Error extracting PDF: <span class="error-msg"></span></p>';
+    const errorMsgEl = elements.textContent.querySelector('.error-msg');
+    if (errorMsgEl) errorMsgEl.textContent = err.message || 'Unknown error';
   }
 }
 
@@ -128,11 +130,13 @@ async function loadPdfFromSource(sourceUrl) {
     elements.textContent.innerHTML = `
       <div style="padding: 20px; text-align: center;">
         <p class="error" style="font-weight: bold; margin-bottom: 12px;">Failed to Load PDF</p>
-        <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 24px;">
-          ${err.message || "An unknown error occurred while trying to parse the PDF."}
-        </p>
+        <p class="error-detail" style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 24px;"></p>
       </div>
     `;
+    const errorDetailEl = elements.textContent.querySelector('.error-detail');
+    if (errorDetailEl) {
+      errorDetailEl.textContent = err.message || "An unknown error occurred while trying to parse the PDF.";
+    }
     showDropZone();
   }
 }

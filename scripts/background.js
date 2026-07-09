@@ -179,8 +179,8 @@ async function ensureOffscreen() {
                 await new Promise(resolve => {
                     iframe.onload = resolve;
                 });
-            } else {
-                await chrome.offscreen.createDocument({
+            } else if (chrome['offscreen'] && typeof chrome['offscreen']['createDocument'] === 'function') {
+                await chrome['offscreen']['createDocument']({
                     url: OFFSCREEN_DOCUMENT_PATH,
                     reasons: ['AUDIO_PLAYBACK'],
                     justification: 'Text-to-Speech playback',
@@ -208,8 +208,8 @@ async function closeOffscreen() {
                     const iframe = document.getElementById('firefox-offscreen-iframe');
                     if (iframe) iframe.remove();
                     pendingCallbacks.clear();
-                } else {
-                    await chrome.offscreen.closeDocument();
+                } else if (chrome['offscreen'] && typeof chrome['offscreen']['closeDocument'] === 'function') {
+                    await chrome['offscreen']['closeDocument']();
                 }
             }
         } catch (e) {

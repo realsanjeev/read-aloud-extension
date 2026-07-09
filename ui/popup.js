@@ -266,9 +266,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <line x1="12" y1="8" x2="12" y2="12"></line>
                 <line x1="12" y1="16" x2="12.01" y2="16"></line>
               </svg>
-              <p>Could not extract content.<br><small>${err.message}</small></p>
+              <p>Could not extract content.<br><small class="error-detail"></small></p>
               <button id="retry-extract-btn" class="retry-btn">Try Again</button>
             </div>`;
+        const errorDetailEl = elements.textContent.querySelector('.error-detail');
+        if (errorDetailEl) errorDetailEl.textContent = err.message || 'Extraction failed';
       }
       
       const retryBtn = document.getElementById('retry-extract-btn');
