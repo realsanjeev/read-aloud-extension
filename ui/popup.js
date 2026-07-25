@@ -35,6 +35,7 @@ const elements = {
   volumeRange: document.getElementById('volumeRange'),
   volumeValue: document.getElementById('volumeValue'),
   highlightModeSelect: document.getElementById('highlightModeSelect'),
+  ratePresets: document.getElementById('ratePresets'),
   chkAutoScroll: document.getElementById('chkAutoScroll'),
   chkMiniPlayer: document.getElementById('chkMiniPlayer'),
 };
@@ -50,6 +51,7 @@ let voiceRetryRef = { count: 0 };
 // --- Voice Auto-Selection ---
 async function autoSelectVoice(text) {
   if (uiState.settings.voiceName || voices.length === 0) return;
+  if (!chrome.i18n.detectLanguage) return;
   try {
     const result = await new Promise((resolve, reject) => {
       chrome.i18n.detectLanguage(text, (res) => {
@@ -75,7 +77,7 @@ async function autoSelectVoice(text) {
 // --- Mini-Player Toggle ---
 async function updateMiniPlayer(show) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.id || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:')) return;
+  if (!tab || !tab.id || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('moz-extension:')) return;
 
   if (show) {
     try {
@@ -112,21 +114,38 @@ function handleUpdateUI(state) {
 
 // --- Export Functions ---
 
+function buildText() {
+  if (uiState.sentences.length === 0) return '';
+  if (!uiState.lineBreaks || uiState.lineBreaks.length === 0) {
+    return uiState.sentences.join(' ');
+  }
+  const parts = [];
+  let paraStart = 0;
+  const breaks = [...uiState.lineBreaks, uiState.sentences.length];
+  for (const breakIdx of breaks) {
+    parts.push(uiState.sentences.slice(paraStart, breakIdx).join(' '));
+    paraStart = breakIdx;
+  }
+  return parts.join('\n\n');
+}
+
 async function copyText() {
-  if (uiState.sentences.length === 0) return;
-  const text = uiState.sentences.join(' ');
+  const text = buildText();
+  if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
     elements.btnCopy.classList.add('success');
     setTimeout(() => elements.btnCopy.classList.remove('success'), 2000);
   } catch (err) {
     console.error('Failed to copy text:', err);
+    elements.btnCopy.classList.add('copy-error');
+    setTimeout(() => elements.btnCopy.classList.remove('copy-error'), 2000);
   }
 }
 
 function downloadText() {
-  if (uiState.sentences.length === 0) return;
-  const text = uiState.sentences.join(' ');
+  const text = buildText();
+  if (!text) return;
   const blob = new Blob([text], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -138,9 +157,7 @@ function downloadText() {
     
     a.href = url;
     a.download = filename;
-    document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   });
 }
@@ -155,7 +172,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   shared.applyTheme(uiState.settings.theme, elements.iconTheme);
   
   // Set up voice selection using UI elements
-  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef);
+  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef, (v) => {
+    voices = v;
+  });
 
   if (elements.btnCopy) elements.btnCopy.onclick = copyText;
   if (elements.btnDownload) elements.btnDownload.onclick = downloadText;
@@ -178,6 +197,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     return false;
   });
 
+  // Issue #4: Seekable progress bar
+  const progressContainer = document.getElementById('progressContainer');
+  if (progressContainer) {
+    progressContainer.addEventListener('click', (e) => {
+      if (uiState.sentences.length === 0) return;
+      const rect = progressContainer.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const index = Math.round(pct * (uiState.sentences.length - 1));
+      shared.sendCommand('JUMP', { index });
+    });
+  }
+
   const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   // 1. Check if background already has a state (playback in progress)
@@ -196,6 +227,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (uiState.settings.miniPlayer) updateMiniPlayer(true);
     } else {
       // 2. Fresh start: extract content
+      elements.textContent.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Extracting content…</p></div>';
       try {
         const text = await getPageContent(currentTab);
         if (text) {
@@ -207,19 +239,43 @@ document.addEventListener('DOMContentLoaded', async () => {
             showResumePrompt(saved.index, text, currentTab.id, currentTab.url);
           } else {
             const autoPlay = isDifferentPage && wasPlaying;
+            if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
+              uiState.settings.voiceName = elements.voiceSelect.value;
+              shared.saveSettings(uiState);
+            }
             shared.sendCommand('INIT', { text, index: 0, settings: uiState.settings, tabId: currentTab.id, tabUrl: currentTab.url, autoPlay });
           }
           if (uiState.settings.miniPlayer) updateMiniPlayer(true);
         } else {
-          elements.textContent.innerHTML = '<p class="placeholder-text">No readable text found.</p>';
+          elements.textContent.innerHTML = `
+            <div class="error-state" style="opacity: 0.8; padding-top: 60px;">
+              <svg viewBox="0 0 24 24" width="48" height="48" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-secondary); margin-bottom: 8px;">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="9" y1="15" x2="15" y2="15"></line>
+              </svg>
+              <p style="font-size: 1rem; color: var(--text-secondary); font-style: italic;">No readable text found on this page.</p>
+            </div>`;
         }
       } catch (err) {
         console.error("Extraction failed:", err);
-        const p = document.createElement('p');
-        p.className = 'error';
-        p.textContent = `Error: ${err.message}`;
-        elements.textContent.innerHTML = '';
-        elements.textContent.appendChild(p);
+        elements.textContent.innerHTML = `
+            <div class="error-state">
+              <svg class="error-icon" viewBox="0 0 24 24" width="36" height="36" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+              </svg>
+              <p>Could not extract content.<br><small class="error-detail"></small></p>
+              <button id="retry-extract-btn" class="retry-btn">Try Again</button>
+            </div>`;
+        const errorDetailEl = elements.textContent.querySelector('.error-detail');
+        if (errorDetailEl) errorDetailEl.textContent = err.message || 'Extraction failed';
+      }
+      
+      const retryBtn = document.getElementById('retry-extract-btn');
+      if (retryBtn) {
+          retryBtn.addEventListener('click', () => location.reload());
       }
     }
   });
@@ -244,14 +300,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 function showResumePrompt(savedIndex, text, tabId, tabUrl) {
   elements.resumePrompt.classList.remove('hidden');
-  elements.btnResumeYes.onclick = () => {
+
+  const dismiss = (index) => {
+    clearTimeout(autoDismiss);
     elements.resumePrompt.classList.add('hidden');
-    shared.sendCommand('INIT', { text, index: savedIndex, settings: uiState.settings, tabId, tabUrl });
+    if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
+      uiState.settings.voiceName = elements.voiceSelect.value;
+      shared.saveSettings(uiState);
+    }
+    shared.sendCommand('INIT', { text, index, settings: uiState.settings, tabId, tabUrl });
   };
-  elements.btnResumeNo.onclick = () => {
-    elements.resumePrompt.classList.add('hidden');
-    shared.sendCommand('INIT', { text, index: 0, settings: uiState.settings, tabId, tabUrl });
-  };
+
+  // Auto-dismiss after 8 s — defaults to starting fresh
+  const autoDismiss = setTimeout(() => dismiss(0), 8000);
+
+  elements.btnResumeYes.onclick = () => dismiss(savedIndex);
+  elements.btnResumeNo.onclick = () => dismiss(0);
 }
 
 // --- Content Extraction ---
@@ -276,14 +340,10 @@ async function getPageContent(tab) {
   if (!tab || !tab.url) return null;
 
   // Block pages where content scripts cannot be injected
-  if (
-    tab.url.startsWith('chrome://') ||
-    tab.url.startsWith('about:') ||
-    tab.url.startsWith('chrome-extension://')
-  ) {
+  if (/^(chrome|about|chrome-extension|moz-extension):/.test(tab.url)) {
     // Special case: Chrome's built-in PDF viewer (chrome-extension://...?pdfUrl)
     // Detect it by checking the query string for a PDF URL
-    if (tab.url.startsWith('chrome-extension://')) {
+    if (/^(chrome-extension|moz-extension):\/\//.test(tab.url)) {
       try {
         const extUrl = new URL(tab.url);
         // Chrome's native PDF viewer encodes the PDF URL as a query param or hash
@@ -362,17 +422,23 @@ async function getPageContent(tab) {
     });
   };
 
-  // 1. Try to send message first
+  // 1. Try to send message first (content script may already be injected)
   let response = await trySendMessage();
 
-  // 2. If it failed due to missing content script connection, inject and retry
+  // 2. If it failed due to missing content script, inject and retry
   if (response && response.error) {
     console.log("Popup: Content script not detected, injecting...");
     try {
       await injectContentScripts(tab.id);
-      // Small pause for initialization
-      await new Promise(r => setTimeout(r, 100));
+      // Give the content script time to register its message listener
+      await new Promise(r => setTimeout(r, 300));
       response = await trySendMessage();
+
+      // 3. If still failing, wait longer and retry once more (Firefox can be slower)
+      if (response && response.error) {
+        await new Promise(r => setTimeout(r, 500));
+        response = await trySendMessage();
+      }
     } catch (injectErr) {
       console.error("Popup: Script injection and retry failed:", injectErr);
     }
@@ -381,14 +447,28 @@ async function getPageContent(tab) {
   if (response && response.result) {
     return response.result;
   }
-  throw new Error(response ? response.error || "Extraction failed." : "Extraction failed.");
+  
+  let errMsg = response ? response.error || "Extraction failed." : "Extraction failed.";
+  if (/receiving end does not exist/i.test(errMsg)) {
+      errMsg = "Extension was updated or lost connection. Please refresh this webpage and try again.";
+  }
+  throw new Error(errMsg);
 }
 
 async function injectContentScripts(tabId) {
   try {
+    // Inject files sequentially — Firefox does not support multi-file injection
+    // in a single executeScript call reliably.
+    //
+    // Use absolute paths (leading '/') so Firefox resolves them from the extension
+    // root instead of relative to the popup page (ui/popup.js → ui/).
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ['lib/Readability.js', 'scripts/content.js']
+      files: ['/lib/Readability.js']
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['/scripts/content.js']
     });
   } catch (e) {
     console.error("Popup: Script injection failed:", e);

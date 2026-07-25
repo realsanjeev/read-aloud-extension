@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Read Aloud Extension",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "minimum_chrome_version": "109",
   "description": "A Text-to-Speech extension that reads web pages aloud.",
   "author": "realsanjeev",
@@ -10,7 +10,8 @@
     "activeTab",
     "scripting",
     "storage",
-    "offscreen"
+    "offscreen",
+    "contextMenus"
   ],
   "optional_host_permissions": [
     "http://*/",
@@ -25,6 +26,10 @@
       "128": "assets/icons/icon-128.png"
     }
   },
+  "options_ui": {
+    "page": "ui/options.html",
+    "open_in_tab": true
+  },
   "background": {
     "service_worker": "scripts/background.js"
   },
@@ -37,6 +42,9 @@
     "extension_pages": "script-src 'self'; object-src 'self';"
   },
   "commands": {
+    "_execute_action": {
+      "description": "Open extension popup"
+    },
     "play_stop": {
       "suggested_key": {
         "default": "Alt+O"
@@ -66,6 +74,15 @@
     },
     "prev_paragraph": {
       "description": "Previous paragraph"
+    }
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "speak-aloud@realsanjeev.com",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
     }
   }
 }

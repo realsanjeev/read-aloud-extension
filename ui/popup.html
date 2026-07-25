@@ -36,20 +36,6 @@
             <line x1="12" y1="15" x2="12" y2="3"></line>
           </svg>
         </button>
-        <button id="btnTheme" class="icon-btn" title="Toggle Theme" aria-label="Toggle dark mode">
-          <svg id="iconTheme" viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"
-            stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="5"></circle>
-            <line x1="12" y1="1" x2="12" y2="3"></line>
-            <line x1="12" y1="21" x2="12" y2="23"></line>
-            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-            <line x1="1" y1="12" x2="3" y2="12"></line>
-            <line x1="21" y1="12" x2="23" y2="12"></line>
-            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-          </svg>
-        </button>
         <button id="btnSettings" class="icon-btn" title="Settings" aria-label="Open settings">
           <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="2" fill="none"
             stroke-linecap="round" stroke-linejoin="round">
@@ -92,6 +78,24 @@
       </div>
 
       <div class="setting-item">
+        <label>Theme</label>
+        <button id="btnTheme" class="icon-btn" title="Toggle Theme" aria-label="Toggle dark mode">
+          <svg id="iconTheme" viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"
+            stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="5"></circle>
+            <line x1="12" y1="1" x2="12" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line>
+            <line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div class="setting-item">
         <label>Voice</label>
         <select id="voiceSelect" class="form-select"></select>
         <div id="voiceError" class="voice-error hidden">No voices available. Please check your system TTS settings.</div>
@@ -108,6 +112,14 @@
       <div class="setting-item">
         <label>Speed: <span id="rateValue">1.0x</span></label>
         <input type="range" id="rateRange" min="0.5" max="3.0" step="0.1" value="1.0">
+        <div class="preset-buttons" id="ratePresets">
+          <button class="preset-btn" data-rate="0.5">0.5x</button>
+          <button class="preset-btn" data-rate="0.75">0.75x</button>
+          <button class="preset-btn active" data-rate="1.0">1.0x</button>
+          <button class="preset-btn" data-rate="1.25">1.25x</button>
+          <button class="preset-btn" data-rate="1.5">1.5x</button>
+          <button class="preset-btn" data-rate="2.0">2.0x</button>
+        </div>
       </div>
 
       <div class="setting-item">
@@ -143,7 +155,7 @@
     <!-- Player Controls -->
     <footer class="player-controls">
       <!-- Progress Bar -->
-      <div class="progress-container">
+      <div class="progress-container" id="progressContainer" title="Click to seek">
         <div class="progress-bar" id="progressBar"></div>
       </div>
 

@@ -1,5 +1,4 @@
 // offscreen.js - Text-to-Speech Engine
-import { hashStr } from './utils.js';
 
 let playerState = {
     sentences: [],
@@ -24,6 +23,15 @@ let voiceRetryCount = 0;
 const MAX_VOICE_RETRIES = 20;
 let isSpeaking = false;
 
+// Firefox detection: in Firefox the offscreen page runs as an iframe inside
+// the background page (window.parent !== window). On Chrome it's standalone.
+const isFirefox = (window.parent !== window);
+
+// Firefox-specific timing constants (ms)
+const FIREFOX_POST_CANCEL_DELAY = 50;     // delay after cancel() before speak()
+const FIREFOX_INTER_UTTERANCE_DELAY = 80;  // gap between consecutive sentences
+const FIREFOX_ERROR_RETRY_DELAY = 350;     // retry delay after TTS error
+
 /**
  * Safely cancels any active SpeechSynthesis utterance and resets lock variables.
  * Clears callbacks to prevent recursive event firing during cancellation.
@@ -41,23 +49,17 @@ function cancelSpeech() {
 
 // Settings are initialized via INIT and UPDATE_SETTINGS messages from the popup
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+function handleMessage(msg, sender, sendResponse) {
     // Ignore direct broadcasts from the popup; only accept commands proxied by the background service worker
-    if (msg.type && (msg.type === 'PLAY' || msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE' || msg.type === 'DETECT_LANG' || msg.type === 'PING') && !msg._forwarded) {
+    if (msg.type && (msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE') && !msg._forwarded) {
         return;
     }
 
     switch (msg.type) {
-        case 'PING':
-            sendResponse({ status: 'pong' });
-            break;
+
         case 'INIT':
             console.log("Offscreen: INIT received, text length:", msg.text ? msg.text.length : 0);
             initPlayer(msg.text, msg.index || 0, msg.settings, msg.autoPlay || false, msg.tabId, msg.tabUrl || null);
-            sendResponse({ status: 'ok' });
-            break;
-        case 'PLAY':
-            play();
             sendResponse({ status: 'ok' });
             break;
         case 'TOGGLE_PLAY':
@@ -69,9 +71,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             sendResponse({ status: 'ok' });
             break;
         case 'STOP':
-            stop();
-            sendResponse({ status: 'ok' });
-            break;
+            stop().then(() => sendResponse({ status: 'ok' }));
+            return true;
         case 'NEXT':
             next();
             sendResponse({ status: 'ok' });
@@ -105,14 +106,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             testVoice();
             sendResponse({ status: 'ok' });
             break;
-        case 'DETECT_LANG':
-            detectLanguage(msg.text)
-                .then(lang => sendResponse({ lang }))
-                .catch(err => sendResponse({ error: err.message }));
-            return true;
         case 'GET_STATE':
             sendUpdate(sendResponse);
             return true;
+    }
+}
+
+chrome.runtime.onMessage.addListener(handleMessage);
+
+// Firefox compatibility: listen to window messages from the parent background script
+window.addEventListener('message', (event) => {
+    const msg = event.data;
+    if (msg && msg.type) {
+        const sendResponse = (response) => {
+            if (msg._messageId) {
+                window.parent.postMessage({
+                    responseTo: msg._messageId,
+                    response: response
+                }, '*');
+            }
+        };
+        handleMessage(msg, {}, sendResponse);
     }
 });
 
@@ -120,32 +134,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
  * Smart sentence tokenizer that handles abbreviations, decimals, and ellipsis.
  */
 function tokenizeSentences(text) {
-    if (!text || text.length === 0) return [];
+    if (!text || text.length === 0) return { sentences: [], lineBreaks: [] };
 
-    // Define abbreviations and special patterns
-    const abbreviations = new Set([
-        // Titles
-        'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'st',
-        // Street types
-        'ave', 'blvd', 'rd', 'ln', 'ct', 'pl',
-        // Academic / Latin
-        'eg', 'ie', 'vs', 'etc', 'et al', 'fig', 'vol', 'vols',
-        // Credentials
-        'inc', 'ltd', 'phd', 'md', 'ba', 'ma',
-        // Time
-        'a.m', 'p.m', 'am', 'pm',
-        // Geopolitical
-        'u.s.a', 'u.k', 'u.s', 'e.u', 'u.n',
-        // Miscellaneous
-        'no', 'nos', 'pp',
-        // Months
-        'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec'
-    ]);
+    let segmenter = null;
+    try {
+        if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+            segmenter = new Intl.Segmenter(undefined, { granularity: 'sentence' });
+        }
+    } catch (e) {
+        console.warn("Intl.Segmenter not supported or failed to initialize, using regex fallback:", e);
+    }
 
-    // Split by line first to preserve paragraph structure
-    const lines = text.split(/\n+/);
     const sentences = [];
     const lineBreaks = [];
+    const lines = text.split(/\n+/);
 
     lines.forEach(line => {
         const trimmedLine = line.trim();
@@ -155,70 +157,24 @@ function tokenizeSentences(text) {
             lineBreaks.push(sentences.length);
         }
 
-        // Split by sentence endings, but be smart about abbreviations
-        const result = [];
-        let current = '';
-        let i = 0;
-
-        while (i < trimmedLine.length) {
-            current += trimmedLine[i];
-
-            if (trimmedLine[i] === '.' || trimmedLine[i] === '!' || trimmedLine[i] === '?' ||
-                trimmedLine[i] === '\u3002' || trimmedLine[i] === '\uFF01' || trimmedLine[i] === '\uFF1F') {
-                const ch = trimmedLine[i];
-                const isCJKPunct = ch === '\u3002' || ch === '\uFF01' || ch === '\uFF1F';
-
-                // Check if this is an ellipsis (ASCII only)
-                if (!isCJKPunct && trimmedLine.substring(i, i + 3) === '...') {
-                    current += trimmedLine[i + 1] || '';
-                    current += trimmedLine[i + 2] || '';
-                    i += 2;
-                }
-                // Check if next char is a quote
-                const nextChar = trimmedLine[i + 1];
-                if (nextChar === '"' || nextChar === "'" || nextChar === '\u201C' || nextChar === '\u2018' || nextChar === '\u201D' || nextChar === '\u2019') {
-                    current += nextChar;
-                    i++;
-                }
-
-                // For CJK punctuation, split cleanly (no abbreviations, decimals, or lowercase continuation)
-                if (isCJKPunct) {
-                    result.push(current.trim());
-                    current = '';
-                } else {
-                    // Look back to see if this period is part of an abbreviation or number
-                    const beforePeriod = current.slice(0, -1).trim();
-                    const lastWordMatch = beforePeriod.match(/([a-zA-Z0-9]+)[.!?]?$/);
-                    const lastWord = lastWordMatch ? lastWordMatch[1].toLowerCase() : '';
-
-                    // Check if it's a decimal number (e.g., 3.14)
-                    const isDecimal = /\d+\.\d+$/.test(beforePeriod);
-
-                    // Check if it's an abbreviation
-                    const isAbbrev = abbreviations.has(lastWord) || abbreviations.has(lastWord + '.');
-
-                    // Check if there's more text and it looks like a sentence continuation (lowercase next word)
-                    const remainder = trimmedLine.substring(i + 1).trim();
-                    const nextWord = remainder.match(/^([a-zA-Z0-9]+)/);
-                    const startsWithLowercase = nextWord && /^[a-z]/.test(nextWord[1]);
-
-                    // Decision: split here unless it's a decimal, abbreviation, or starts with lowercase
-                    if (!isDecimal && !isAbbrev && (!startsWithLowercase || ch !== '.')) {
-                        result.push(current.trim());
-                        current = '';
-                    }
+        if (segmenter) {
+            for (const segment of segmenter.segment(trimmedLine)) {
+                const s = segment.segment.trim();
+                if (s.length > 0) {
+                    sentences.push(s);
                 }
             }
-
-            i++;
+        } else {
+            // Regex fallback for older browsers (Firefox < 125)
+            // Splitting by typical sentence boundaries (. ! ?) followed by whitespace
+            const segments = trimmedLine.split(/(?<=[.!?])\s+/);
+            segments.forEach(segment => {
+                const s = segment.trim();
+                if (s.length > 0) {
+                    sentences.push(s);
+                }
+            });
         }
-
-        // Add any remaining text as the last sentence
-        if (current.trim().length > 0) {
-            result.push(current.trim());
-        }
-
-        sentences.push(...result);
     });
 
     return { sentences, lineBreaks };
@@ -279,6 +235,7 @@ function play() {
     playerState.isPaused = false;
     sendUpdate();
     speakCurrentSentence();
+    startAutoPersist();
 }
 
 function pause() {
@@ -307,17 +264,12 @@ function togglePause() {
 
 async function stop() {
     await savePosition();
+    clearInterval(autoPersistIntervalId);
     playerState.isPlaying = false;
     playerState.isPaused = false;
     playerState.currentIndex = 0;
     cancelSpeech();
     sendUpdate();
-    // Signal background that state is fully persisted and it's safe to close
-    chrome.runtime.sendMessage({ type: 'STOP_COMPLETE' }, () => {
-        if (chrome.runtime.lastError) {
-            console.debug("Offscreen: STOP_COMPLETE had no receivers:", chrome.runtime.lastError.message);
-        }
-    });
 }
 
 function next() {
@@ -450,7 +402,14 @@ function speakCurrentSentence() {
         if (playerState.isPlaying && !playerState.isPaused) {
             playerState.currentIndex++;
             if (playerState.currentIndex < playerState.sentences.length) {
-                speakCurrentSentence();
+                savePosition();
+                // Firefox needs a brief gap between utterances to avoid
+                // clipped beginnings, audio pops, and skipped sentences
+                if (isFirefox) {
+                    setTimeout(speakCurrentSentence, FIREFOX_INTER_UTTERANCE_DELAY);
+                } else {
+                    speakCurrentSentence();
+                }
             } else {
                 stop();
             }
@@ -467,12 +426,25 @@ function speakCurrentSentence() {
                     playerState.currentIndex++;
                     errorRetryCount = 0;
                 }
-                setTimeout(speakCurrentSentence, 100);
+                // Firefox's speech engine needs longer recovery time
+                const retryDelay = isFirefox ? FIREFOX_ERROR_RETRY_DELAY : 100;
+                setTimeout(speakCurrentSentence, retryDelay);
             }
         }
     };
 
-    window.speechSynthesis.speak(utter);
+    // On Firefox, delay speak() after cancel() to prevent overlapping/garbled audio
+    if (isFirefox) {
+        setTimeout(() => {
+            if (playerState.isPlaying && !playerState.isPaused) {
+                window.speechSynthesis.speak(utter);
+            } else {
+                isSpeaking = false;
+            }
+        }, FIREFOX_POST_CANCEL_DELAY);
+    } else {
+        window.speechSynthesis.speak(utter);
+    }
 }
 function sendUpdate(sendResponse = null, extra = {}) {
     const state = {
@@ -480,10 +452,14 @@ function sendUpdate(sendResponse = null, extra = {}) {
         isPaused: playerState.isPaused,
         currentIndex: playerState.currentIndex,
         totalSentences: playerState.sentences.length,
-        // Only send sentences if it's a direct response to a state request or specifically requested
         lineBreaks: playerState.lineBreaks,
         tabId: playerState.tabId,
         tabUrl: playerState.tabUrl,
+        settings: {
+            rate: playerState.settings.rate,
+            pitch: playerState.settings.pitch,
+            volume: playerState.settings.volume
+        },
         ...extra
     };
 
@@ -508,7 +484,7 @@ function savePosition() {
     if (!playerState.tabUrl || playerState.sentences.length === 0) return Promise.resolve();
     // Guard against extension context being torn down during auto-persist
     if (!chrome.storage) return Promise.resolve();
-    const key = 'pos_' + hashStr(playerState.tabUrl);
+    const key = 'pos_' + playerState.tabUrl;
     return new Promise((resolve) => {
         chrome.storage.local.set({
             [key]: {
@@ -578,32 +554,24 @@ function testVoice() {
     window.speechSynthesis.speak(utter);
 }
 
-// --- Language Detection ---
 
-function detectLanguage(text) {
-    return new Promise((resolve, reject) => {
-        chrome.i18n.detectLanguage(text, (result) => {
-            if (chrome.runtime.lastError) {
-                reject(new Error(chrome.runtime.lastError.message));
-                return;
-            }
-            if (result && result.languages && result.languages.length > 0) {
-                resolve(result.languages[0].language);
-            } else {
-                reject(new Error("Language could not be detected"));
-            }
-        });
-    });
-}
 
 // Auto-persist position periodically while playing
-const autoPersistIntervalId = setInterval(() => {
-    if (playerState.isPlaying && !playerState.isPaused) {
-        savePosition();
-    }
-}, 5000);
+let autoPersistIntervalId = null;
 
-// Clean up the interval when the offscreen document is being closed
-window.addEventListener('beforeunload', () => {
-    clearInterval(autoPersistIntervalId);
+function startAutoPersist() {
+    if (autoPersistIntervalId !== null) return;
+    autoPersistIntervalId = setInterval(() => {
+        if (playerState.isPlaying && !playerState.isPaused) {
+            savePosition();
+        }
+    }, 5000);
+}
+
+// Cleanup on page hide/unload
+addEventListener('pagehide', () => {
+    if (autoPersistIntervalId !== null) {
+        clearInterval(autoPersistIntervalId);
+        autoPersistIntervalId = null;
+    }
 });

@@ -82,6 +82,10 @@ async function handleLocalFile(file) {
       pdfUrl = `file_upload://${file.name}`;
       const saved = await getSavedPosition(pdfUrl);
       const index = saved && saved.index > 0 ? saved.index : 0;
+      if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
+        uiState.settings.voiceName = elements.voiceSelect.value;
+        shared.saveSettings(uiState);
+      }
       shared.sendCommand('INIT', { text, index, settings: uiState.settings, tabUrl: pdfUrl });
       updatePlayButtonState();
     } else {
@@ -89,7 +93,9 @@ async function handleLocalFile(file) {
     }
   } catch (err) {
     console.error("Local PDF extraction failed:", err);
-    elements.textContent.innerHTML = `<p class="error">Error extracting PDF: ${err.message}</p>`;
+    elements.textContent.innerHTML = '<p class="error">Error extracting PDF: <span class="error-msg"></span></p>';
+    const errorMsgEl = elements.textContent.querySelector('.error-msg');
+    if (errorMsgEl) errorMsgEl.textContent = err.message || 'Unknown error';
   }
 }
 
@@ -110,6 +116,10 @@ async function loadPdfFromSource(sourceUrl) {
       contentReady = true;
       const saved = await getSavedPosition(sourceUrl);
       const index = saved && saved.index > 0 ? saved.index : 0;
+      if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
+        uiState.settings.voiceName = elements.voiceSelect.value;
+        shared.saveSettings(uiState);
+      }
       shared.sendCommand('INIT', { text, index, settings: uiState.settings, tabUrl: sourceUrl });
       updatePlayButtonState();
     } else {
@@ -120,11 +130,13 @@ async function loadPdfFromSource(sourceUrl) {
     elements.textContent.innerHTML = `
       <div style="padding: 20px; text-align: center;">
         <p class="error" style="font-weight: bold; margin-bottom: 12px;">Failed to Load PDF</p>
-        <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 24px;">
-          ${err.message || "An unknown error occurred while trying to parse the PDF."}
-        </p>
+        <p class="error-detail" style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 24px;"></p>
       </div>
     `;
+    const errorDetailEl = elements.textContent.querySelector('.error-detail');
+    if (errorDetailEl) {
+      errorDetailEl.textContent = err.message || "An unknown error occurred while trying to parse the PDF.";
+    }
     showDropZone();
   }
 }
@@ -157,7 +169,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   shared.setControlsEnabled(elements, false);
   await shared.loadSharedSettings(uiState, elements);
   shared.applyTheme(uiState.settings.theme, elements.iconTheme);
-  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef);
+  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef, (v) => {
+    voices = v;
+  });
 
   // Wire up settings panel event listeners
   shared.wireSettingsListeners(uiState, elements, {
@@ -232,25 +246,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   if (pdfUrl.startsWith('file://')) {
-    chrome.extension.isAllowedFileSchemeAccess(async (isAllowed) => {
-      if (!isAllowed) {
-        console.warn("Extension does not have access to file URLs.");
-        elements.textContent.innerHTML = `
-          <div style="padding: 20px; text-align: center;">
-            <p class="error" style="font-weight: bold; margin-bottom: 12px; color: #ef4444;">Local PDF URL Blocked by Chrome</p>
-            <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 20px; line-height: 1.6;">
-              Chrome extensions require explicit permission to read local files directly.
-            </p>
-            <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 24px; line-height: 1.6;">
-              Please drag and drop your local PDF below to read it instantly, or go to <strong style="color: var(--primary-color)">chrome://extensions</strong>, find "Read Aloud Extension", and check "Allow access to file URLs".
-            </p>
-          </div>
-        `;
-        elements.dropZone.classList.remove('hidden');
-      } else {
-        await loadPdfFromSource(pdfUrl);
-      }
-    });
+    if (typeof chrome.extension !== 'undefined' && chrome.extension.isAllowedFileSchemeAccess) {
+      chrome.extension.isAllowedFileSchemeAccess(async (isAllowed) => {
+        if (!isAllowed) {
+          console.warn("Extension does not have access to file URLs.");
+          elements.textContent.innerHTML = `
+            <div style="padding: 20px; text-align: center;">
+              <p class="error" style="font-weight: bold; margin-bottom: 12px; color: #ef4444;">Local PDF URL Blocked by Chrome</p>
+              <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 20px; line-height: 1.6;">
+                Chrome extensions require explicit permission to read local files directly.
+              </p>
+              <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 24px; line-height: 1.6;">
+                Please drag and drop your local PDF below to read it instantly, or go to <strong style="color: var(--primary-color)">chrome://extensions</strong>, find "Read Aloud Extension", and check "Allow access to file URLs".
+              </p>
+            </div>
+          `;
+          elements.dropZone.classList.remove('hidden');
+        } else {
+          await loadPdfFromSource(pdfUrl);
+        }
+      });
+    } else {
+      await loadPdfFromSource(pdfUrl);
+    }
   } else {
     await loadPdfFromSource(pdfUrl);
   }

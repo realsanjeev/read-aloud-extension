@@ -3,6 +3,12 @@ import { debounce } from './utils.js';
 
 export const MAX_VOICE_RETRIES = 20;
 
+export function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.appendChild(document.createTextNode(str));
+  return div.innerHTML;
+}
+
 export function createBaseState() {
   return {
     sentences: [],
@@ -78,7 +84,7 @@ export async function loadSharedSettings(uiState, elements) {
   if (elements.chkMiniPlayer) elements.chkMiniPlayer.checked = uiState.settings.miniPlayer;
 }
 
-export function setupVoiceSelection(uiState, elements, voiceRetryRef) {
+export function setupVoiceSelection(uiState, elements, voiceRetryRef, onVoicesChanged = null) {
   const updateVoices = () => {
     const voices = window.speechSynthesis.getVoices();
     if (voices.length === 0) {
@@ -89,6 +95,7 @@ export function setupVoiceSelection(uiState, elements, voiceRetryRef) {
         if (elements.voiceError) elements.voiceError.classList.remove('hidden');
         if (elements.voiceSelect) elements.voiceSelect.innerHTML = '<option value="">No voices available</option>';
       }
+      if (onVoicesChanged) onVoicesChanged(voices);
       return voices;
     }
     if (elements.voiceError) elements.voiceError.classList.add('hidden');
@@ -131,7 +138,8 @@ export function setupVoiceSelection(uiState, elements, voiceRetryRef) {
         voicesByLang[label].forEach(v => {
           const opt = document.createElement('option');
           opt.value = v.name;
-          opt.textContent = v.name;
+          opt.textContent = `${v.localService ? '🖥' : '☁'} ${v.name}`;
+          opt.title = v.localService ? 'Local voice (works offline)' : 'Online voice (requires internet)';
           optgroup.appendChild(opt);
         });
         elements.voiceSelect.appendChild(optgroup);
@@ -141,6 +149,7 @@ export function setupVoiceSelection(uiState, elements, voiceRetryRef) {
         elements.voiceSelect.value = uiState.settings.voiceName;
       }
     }
+    if (onVoicesChanged) onVoicesChanged(voices);
     return voices;
   };
 
@@ -161,8 +170,11 @@ export function handleUpdateUI(uiState, state, callbacks) {
     uiState.sentences = state.sentences;
   }
 
-  const { sentences, ...rest } = state;
+  const { sentences, settings: stateSettings, ...rest } = state;
   Object.assign(uiState, rest);
+  if (stateSettings) {
+    Object.assign(uiState.settings, stateSettings);
+  }
 
   if (needsRerender && callbacks.renderSentences) {
     callbacks.renderSentences();
@@ -175,6 +187,7 @@ export function handleUpdateUI(uiState, state, callbacks) {
   }
 
   if (callbacks.togglePlayIcon) callbacks.togglePlayIcon(uiState.isPlaying && !uiState.isPaused);
+  if (callbacks.updatePlayingClass) callbacks.updatePlayingClass();
   if (callbacks.updateProgress) callbacks.updateProgress();
   if (callbacks.updatePlayButtonState) callbacks.updatePlayButtonState();
 }
@@ -309,6 +322,7 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
   const debouncedSave = debounce(() => saveSettings(uiState), 300);
 
   if (elements.rateRange) {
+    let rateInputTimer = null;
     elements.rateRange.oninput = (e) => {
       uiState.settings.rate = parseFloat(e.target.value);
       if (elements.rateValue) elements.rateValue.textContent = e.target.value + "x";
@@ -318,8 +332,12 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
         });
       }
       debouncedSave();
+      // Apply rate in real-time during drag
+      if (rateInputTimer) clearTimeout(rateInputTimer);
+      rateInputTimer = setTimeout(() => sendSettings(uiState), 50);
     };
     elements.rateRange.onchange = () => {
+      if (rateInputTimer) clearTimeout(rateInputTimer);
       saveSettings(uiState);
       sendSettings(uiState);
     };
@@ -403,30 +421,51 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
   }
 
   if (elements.btnSettings && elements.settingsPanel) {
-    elements.btnSettings.onclick = () => elements.settingsPanel.classList.remove('hidden');
+    elements.btnSettings.onclick = () => {
+      elements.settingsPanel.classList.toggle('hidden');
+    };
   }
   if (elements.btnCloseSettings && elements.settingsPanel) {
     elements.btnCloseSettings.onclick = () => elements.settingsPanel.classList.add('hidden');
   }
 
+  const themes = ['auto', 'light', 'dark'];
+  const cap = (s) => s[0].toUpperCase() + s.slice(1);
+  const updateThemeTitle = (theme) => {
+    const next = themes[(themes.indexOf(theme) + 1) % themes.length];
+    if (elements.btnTheme) {
+      elements.btnTheme.title = `Theme: ${cap(theme)} — click for ${cap(next)}`;
+      elements.btnTheme.setAttribute('aria-label', `Current theme: ${cap(theme)}. Click to switch to ${cap(next)}`);
+    }
+  };
+  updateThemeTitle(uiState.settings.theme || 'auto');
+
   if (elements.btnTheme) {
     elements.btnTheme.onclick = () => {
-      const themes = ['auto', 'light', 'dark'];
       const current = uiState.settings.theme || 'auto';
       const next = themes[(themes.indexOf(current) + 1) % themes.length];
       uiState.settings.theme = next;
       applyTheme(next, elements.iconTheme || null);
+      updateThemeTitle(next);
       saveSettings(uiState);
       sendSettings(uiState);
     };
   }
 
   if (elements.btnTestVoice) {
-    elements.btnTestVoice.onclick = () => sendCommand('TEST');
+    elements.btnTestVoice.onclick = () => {
+      if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
+        uiState.settings.voiceName = elements.voiceSelect.value;
+        saveSettings(uiState);
+        sendSettings(uiState);
+      }
+      sendCommand('TEST');
+    };
   }
 
   if (elements.btnReset) {
     elements.btnReset.onclick = async () => {
+      if (!confirm('Reset all settings to defaults? This cannot be undone.')) return;
       const defaultSettings = {
         voiceName: null,
         rate: 1.0,
@@ -456,6 +495,11 @@ export function wirePlayerControls(uiState, elements, playGuard = null) {
   if (elements.btnPlay) {
     elements.btnPlay.onclick = () => {
       if (playGuard && playGuard()) return;
+      if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
+        uiState.settings.voiceName = elements.voiceSelect.value;
+        saveSettings(uiState);
+        sendSettings(uiState);
+      }
       sendCommand('TOGGLE_PLAY');
     };
   }
@@ -492,6 +536,9 @@ export function createHandleUpdateUICallbacks(uiState, elements, extraCallbacks 
     togglePlayIcon: (active) => togglePlayIcon(active, elements.iconPlay, elements.iconPause),
     updateProgress: () => updateProgress(uiState, elements.progressBar),
     updatePlayButtonState: () => setControlsEnabled(elements, uiState.sentences.length > 0),
+    updatePlayingClass: () => {
+      if (elements.textContent) elements.textContent.classList.toggle('is-playing', uiState.isPlaying && !uiState.isPaused);
+    },
     ...extraCallbacks
   };
 }
