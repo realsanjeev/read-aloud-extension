@@ -21,7 +21,7 @@ A premium Text-to-Speech (TTS) Chrome Extension that automatically detects and r
 
 **Official Stores:**
 - [Available on Chrome Web Store](https://chromewebstore.google.com/detail/read-aloud-extension/albdidadjkmkoieokamkkdhpidmjgpea)
-- [Available on Firefox Add-ons](#) *(Coming soon)*
+- [Available on Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/read-aloud-extension/)
 
 **Manual Installation (Developer Mode):**
 1.  Clone or download this repository.
