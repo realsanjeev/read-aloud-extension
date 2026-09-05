@@ -44,7 +44,9 @@ function sendToOffscreen(msg, callback) {
         if (callback) {
             chrome.runtime.sendMessage(msg, callback);
         } else {
-            chrome.runtime.sendMessage(msg);
+            chrome.runtime.sendMessage(msg, () => {
+                const _ = chrome.runtime.lastError;
+            });
         }
     }
 }
@@ -71,11 +73,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         // Inject files sequentially for Firefox compatibility
         await chrome.scripting.executeScript({
             target: { tabId: tab.id },
-            files: ['lib/Readability.js']
+            files: ['/lib/Readability.js']
         });
         await chrome.scripting.executeScript({
             target: { tabId: tab.id },
-            files: ['scripts/content.js']
+            files: ['/scripts/content.js']
         });
 
         const response = await new Promise((resolve) => {
@@ -303,9 +305,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                     } else {
                         sendResponse(response);
                     }
-                    if (msg.type === 'STOP') {
-                        closeOffscreen();
-                    }
                 });
             } else {
                 sendToOffscreen({ ...msg, _forwarded: true });
@@ -341,3 +340,15 @@ chrome.commands.onCommand.addListener(async (command) => {
 
 // Clean up offscreen when extension is suspended or updated
 chrome.runtime.onSuspend.addListener(closeOffscreen);
+
+// Stop playback if the tab being read is closed
+chrome.tabs.onRemoved.addListener(async (closedTabId) => {
+    try {
+        const hasDoc = await hasOffscreenDocument();
+        if (hasDoc) {
+            sendToOffscreen({ type: 'STOP_IF_TAB', tabId: closedTabId, _forwarded: true });
+        }
+    } catch (e) {
+        // Ignore errors during tab close check
+    }
+});

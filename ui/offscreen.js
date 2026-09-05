@@ -51,7 +51,7 @@ function cancelSpeech() {
 
 function handleMessage(msg, sender, sendResponse) {
     // Ignore direct broadcasts from the popup; only accept commands proxied by the background service worker
-    if (msg.type && (msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE') && !msg._forwarded) {
+    if (msg.type && (msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE' || msg.type === 'STOP_IF_TAB') && !msg._forwarded) {
         return;
     }
 
@@ -103,8 +103,21 @@ function handleMessage(msg, sender, sendResponse) {
             sendResponse({ status: 'ok' });
             break;
         case 'TEST':
-            testVoice();
+            testVoice(msg);
             sendResponse({ status: 'ok' });
+            break;
+        case 'STOP_IF_TAB':
+            if (playerState.tabId && playerState.tabId === msg.tabId) {
+                stop().then(() => {
+                    playerState.tabId = null;
+                    playerState.tabUrl = null;
+                    playerState.sentences = [];
+                    sendUpdate(null, { fullPayload: true });
+                    sendResponse({ status: 'ok' });
+                });
+                return true;
+            }
+            sendResponse({ status: 'ignored' });
             break;
         case 'GET_STATE':
             sendUpdate(sendResponse);
@@ -325,8 +338,6 @@ function prevParagraph() {
 
 function speakCurrentSentence() {
     if (isSpeaking) return;
-    isSpeaking = true;
-
     cancelSpeech();
     isSpeaking = true;
     
@@ -504,7 +515,7 @@ function savePosition() {
 let testVoiceRetryCount = 0;
 const MAX_TEST_VOICE_RETRIES = 20;
 
-function testVoice() {
+function testVoice(msg = {}) {
     const wasPlaying = playerState.isPlaying;
     const wasPaused = playerState.isPaused;
     const savedIndex = playerState.currentIndex;
@@ -515,9 +526,14 @@ function testVoice() {
     const utter = new SpeechSynthesisUtterance(text);
     playerState.utterance = utter;
 
-    utter.rate = playerState.settings.rate;
-    utter.pitch = playerState.settings.pitch;
-    utter.volume = playerState.settings.volume;
+    const rate = (msg.rate !== undefined) ? msg.rate : playerState.settings.rate;
+    const pitch = (msg.pitch !== undefined) ? msg.pitch : playerState.settings.pitch;
+    const volume = (msg.volume !== undefined) ? msg.volume : playerState.settings.volume;
+    const voiceName = msg.voiceName || playerState.settings.voiceName;
+
+    utter.rate = rate;
+    utter.pitch = pitch;
+    utter.volume = volume;
 
     const voices = window.speechSynthesis.getVoices();
     if (voices.length === 0) {
@@ -528,13 +544,13 @@ function testVoice() {
         }
         console.warn("Offscreen: Voices not loaded for test, waiting...");
         testVoiceRetryCount++;
-        setTimeout(testVoice, 100);
+        setTimeout(() => testVoice(msg), 100);
         return;
     }
     testVoiceRetryCount = 0;
 
-    if (playerState.settings.voiceName) {
-        const v = voices.find(voice => voice.name === playerState.settings.voiceName);
+    if (voiceName) {
+        const v = voices.find(voice => voice.name === voiceName);
         if (v) utter.voice = v;
     }
 

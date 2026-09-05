@@ -459,7 +459,12 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
         saveSettings(uiState);
         sendSettings(uiState);
       }
-      sendCommand('TEST');
+      sendCommand('TEST', {
+        voiceName: uiState.settings.voiceName || (elements.voiceSelect ? elements.voiceSelect.value : null),
+        rate: uiState.settings.rate,
+        pitch: uiState.settings.pitch,
+        volume: uiState.settings.volume
+      });
     };
   }
 
