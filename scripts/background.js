@@ -1,9 +1,13 @@
 // background.js - Orchestrator for Speak Aloud Extension
 
 let offscreenCreating = null;
-let offscreenClosePromise = null;
-let offscreenClosing = false;
 const OFFSCREEN_DOCUMENT_PATH = chrome.runtime.getURL('ui/offscreen.html');
+
+// Commands from UI / content scripts that are proxied to the offscreen player
+const OFFSCREEN_COMMANDS = new Set([
+    'PAUSE', 'STOP', 'TOGGLE_PLAY', 'NEXT', 'PREV', 'NEXT_PARA', 'PREV_PARA',
+    'JUMP', 'INIT', 'UPDATE_SETTINGS', 'TEST', 'GET_STATE'
+]);
 
 // Firefox fallback state
 const isFirefoxBackgroundPage = typeof chrome.offscreen === 'undefined' && typeof document !== 'undefined';
@@ -64,7 +68,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId !== 'read-aloud') return;
     if (!tab || !tab.id || !tab.url) return;
 
-    const blocked = /^(chrome|about|chrome-extension|moz-extension):/.test(tab.url);
+    const blocked = !/^(https?|file):/i.test(tab.url) || /^https?:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore|addons\.mozilla\.org|microsoftedge\.microsoft\.com\/addons)(\/|$)/i.test(tab.url);
     if (blocked) return;
 
     try {
@@ -116,11 +120,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             }, (res) => resolve(res));
         });
 
-        // Show mini-player
-        try {
-            await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_MINI_PLAYER', visible: true });
-        } catch (e) {
-            // Content script not available
+        // Show mini-player unless the user disabled it
+        if (data.miniPlayer !== false) {
+            chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_MINI_PLAYER', visible: true }).catch(() => {});
         }
     } catch (e) {
         console.error("Context menu Read Aloud failed:", e);
@@ -160,113 +162,32 @@ async function hasOffscreenDocument() {
 
 /**
  * Ensures the offscreen document is created and ready to receive messages.
+ * The in-flight promise covers the existence check too, so concurrent callers
+ * can't both decide to create the document (createDocument throws on a second one).
  */
-async function ensureOffscreen() {
-    if (offscreenClosing) {
-        await offscreenClosePromise;
-    }
-    
-    if (offscreenCreating) return offscreenCreating;
-
-    const hasDoc = await hasOffscreenDocument();
-    if (hasDoc) return Promise.resolve();
-
-    offscreenCreating = (async () => {
-        try {
-            if (isFirefoxBackgroundPage) {
-                const iframe = document.createElement('iframe');
-                iframe.id = 'firefox-offscreen-iframe';
-                iframe.src = OFFSCREEN_DOCUMENT_PATH;
-                document.body.appendChild(iframe);
-                await new Promise(resolve => {
-                    iframe.onload = resolve;
-                });
-            } else if (chrome['offscreen'] && typeof chrome['offscreen']['createDocument'] === 'function') {
-                await chrome['offscreen']['createDocument']({
-                    url: OFFSCREEN_DOCUMENT_PATH,
-                    reasons: ['AUDIO_PLAYBACK'],
-                    justification: 'Text-to-Speech playback',
-                });
-            }
-        } catch (e) {
-            console.error("Background: Error creating offscreen document:", e);
-            throw e;
-        } finally {
-            offscreenCreating = null;
+function ensureOffscreen() {
+    return (offscreenCreating ??= (async () => {
+        if (await hasOffscreenDocument()) return;
+        if (isFirefoxBackgroundPage) {
+            const iframe = document.createElement('iframe');
+            iframe.id = 'firefox-offscreen-iframe';
+            iframe.src = OFFSCREEN_DOCUMENT_PATH;
+            document.body.appendChild(iframe);
+            await new Promise(r => (iframe.onload = r));
+        } else {
+            await chrome.offscreen.createDocument({
+                url: OFFSCREEN_DOCUMENT_PATH,
+                reasons: ['AUDIO_PLAYBACK'],
+                justification: 'Text-to-Speech playback',
+            });
         }
-    })();
-
-    return offscreenCreating;
-}
-
-async function closeOffscreen() {
-    if (offscreenClosing) return;
-    offscreenClosing = true;
-    offscreenClosePromise = (async () => {
-        try {
-            const hasDoc = await hasOffscreenDocument();
-            if (hasDoc) {
-                if (isFirefoxBackgroundPage) {
-                    const iframe = document.getElementById('firefox-offscreen-iframe');
-                    if (iframe) iframe.remove();
-                    pendingCallbacks.clear();
-                } else if (chrome['offscreen'] && typeof chrome['offscreen']['closeDocument'] === 'function') {
-                    await chrome['offscreen']['closeDocument']();
-                }
-            }
-        } catch (e) {
-            console.warn("Failed to close offscreen:", e);
-        } finally {
-            offscreenClosing = false;
-            offscreenClosePromise = null;
-        }
-    })();
-    return offscreenClosePromise;
+    })().finally(() => {
+        offscreenCreating = null;
+    }));
 }
 
 // Proxy messages to offscreen
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    // Security: Validate sender origin if present
-    if (sender.id && sender.id !== chrome.runtime.id) {
-        console.warn("Unauthorized message origin:", sender.id);
-        return;
-    }
-
-    // Internal background commands
-
-
-    if (msg.type === 'FETCH_PDF' && msg.url) {
-        const origin = new URL(msg.url).origin + '/*';
-        chrome.permissions.contains({ origins: [origin] }, (hasPermission) => {
-            const doFetch = () => {
-                fetch(msg.url)
-                    .then(async (response) => {
-                        if (!response.ok) {
-                            throw new Error(`HTTP error! status: ${response.status}`);
-                        }
-                        const buffer = await response.arrayBuffer();
-                        sendResponse({ status: 'success', data: new Uint8Array(buffer) });
-                    })
-                    .catch((err) => {
-                        console.error("Background: FETCH_PDF failed:", err);
-                        sendResponse({ status: 'error', message: err.message });
-                    });
-            };
-
-            if (hasPermission) {
-                doFetch();
-            } else {
-                chrome.permissions.request({ origins: [origin] }, (granted) => {
-                    if (granted) {
-                        doFetch();
-                    } else {
-                        sendResponse({ status: 'error', message: 'Host permission denied. Please allow access to this site to load the PDF.' });
-                    }
-                });
-            }
-        });
-        return true; // Keep channel open for async response
-    }
 
     if (msg.type === 'UPDATE_UI' && msg.state) {
         const { sentences, currentIndex, isPlaying, isPaused, tabId } = msg.state;
@@ -290,26 +211,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     // Forward player commands to offscreen
-    if (msg.type && (msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE')) {
+    if (OFFSCREEN_COMMANDS.has(msg.type)) {
         if (msg._forwarded) return; // Prevent infinite recursion
 
-        console.log("Background: Forwarding command to offscreen:", msg.type);
         ensureOffscreen().then(() => {
-            const expectsResponse = ['GET_STATE', 'INIT', 'STOP'].includes(msg.type);
-
-            if (expectsResponse) {
-                sendToOffscreen({ ...msg, _forwarded: true }, (response) => {
-                    if (chrome.runtime.lastError) {
-                        console.warn("Proxy error:", chrome.runtime.lastError.message);
-                        sendResponse({ status: 'error', message: chrome.runtime.lastError.message });
-                    } else {
-                        sendResponse(response);
-                    }
-                });
-            } else {
-                sendToOffscreen({ ...msg, _forwarded: true });
-                sendResponse({ status: 'ok' });
-            }
+            sendToOffscreen({ ...msg, _forwarded: true }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.warn("Proxy error:", chrome.runtime.lastError.message);
+                    sendResponse({ status: 'error', message: chrome.runtime.lastError.message });
+                } else {
+                    sendResponse(response);
+                }
+            });
         }).catch(err => {
             console.error("Background: Failed to ensure offscreen:", err);
             sendResponse({ status: 'error', message: err.message });
@@ -337,9 +250,6 @@ chrome.commands.onCommand.addListener(async (command) => {
         console.error("Keyboard command failed:", e);
     }
 });
-
-// Clean up offscreen when extension is suspended or updated
-chrome.runtime.onSuspend.addListener(closeOffscreen);
 
 // Stop playback if the tab being read is closed
 chrome.tabs.onRemoved.addListener(async (closedTabId) => {

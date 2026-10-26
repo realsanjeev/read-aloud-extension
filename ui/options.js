@@ -22,12 +22,10 @@ const elements = {
 let uiState = shared.createBaseState();
 uiState.settings.miniPlayer = true;
 
-let voiceRetryRef = { count: 0 };
-
 document.addEventListener('DOMContentLoaded', async () => {
   await shared.loadSharedSettings(uiState, elements);
   shared.applyTheme(uiState.settings.theme, elements.iconTheme);
-  shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef);
+  shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError });
 
   shared.wireSettingsListeners(uiState, elements, {
     onMiniPlayerChange: async (checked) => {
