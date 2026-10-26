@@ -213,21 +213,16 @@ function tokenizeSentences(text) {
 function initPlayer(text, startIndex, settings = null, autoPlay = false, tabId = null, tabUrl = null) {
     cancelSpeech();
 
-    if (tabId !== null) {
+    if (text) {
         playerState.tabId = tabId;
-    }
-    if (tabUrl !== null) {
         playerState.tabUrl = tabUrl;
+        const tokenized = tokenizeSentences(text);
+        playerState.sentences = tokenized.sentences;
+        playerState.lineBreaks = tokenized.lineBreaks;
     }
 
     if (settings) {
         playerState.settings = { ...playerState.settings, ...settings };
-    }
-
-    if (text) {
-        const tokenized = tokenizeSentences(text);
-        playerState.sentences = tokenized.sentences;
-        playerState.lineBreaks = tokenized.lineBreaks;
     }
 
     playerState.currentIndex = Math.min(startIndex, playerState.sentences.length - 1);
@@ -289,12 +284,13 @@ function togglePause() {
 }
 
 async function stop() {
-    await savePosition();
+    const posPromise = savePosition();
     playerState.isPlaying = false;
     playerState.isPaused = false;
     playerState.currentIndex = 0;
     cancelSpeech();
     sendUpdate();
+    await posPromise;
 }
 
 function next() {
@@ -508,5 +504,5 @@ function testVoice(msg = {}) {
         if (wasPlaying) speakCurrentSentence();
         else sendUpdate();
     };
-    window.speechSynthesis.speak(utter);
+    isFirefox ? (speakTimer = setTimeout(() => speechSynthesis.speak(utter), FIREFOX_POST_CANCEL_DELAY)) : speechSynthesis.speak(utter);
 }

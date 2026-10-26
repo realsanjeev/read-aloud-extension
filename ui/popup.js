@@ -72,10 +72,13 @@ async function autoSelectVoice(text) {
   }
 }
 
+const isRestrictedUrl = (url) => !url || !/^(https?|file):/i.test(url) || /^https?:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore|addons\.mozilla\.org|microsoftedge\.microsoft\.com\/addons)(\/|$)/i.test(url);
+const RESTRICTED_PAGE_MSG = "Browser security blocks extensions on internal pages and extension stores. Open any regular webpage to use Read Aloud.";
+
 // --- Mini-Player Toggle ---
 async function updateMiniPlayer(show) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.id || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('moz-extension:')) return;
+  if (!tab || !tab.id || isRestrictedUrl(tab.url)) return;
 
   if (show) {
     try {
@@ -254,6 +257,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       } catch (err) {
         console.error("Extraction failed:", err);
+        const isRestricted = err.message === RESTRICTED_PAGE_MSG;
         elements.textContent.innerHTML = `
             <div class="error-state">
               <svg class="error-icon" viewBox="0 0 24 24" width="36" height="36" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
@@ -261,8 +265,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <line x1="12" y1="8" x2="12" y2="12"></line>
                 <line x1="12" y1="16" x2="12.01" y2="16"></line>
               </svg>
-              <p>Could not extract content.<br><small class="error-detail"></small></p>
-              <button id="retry-extract-btn" class="retry-btn">Try Again</button>
+              <p>${isRestricted ? 'Cannot read this page.' : 'Could not extract content.'}<br><small class="error-detail"></small></p>
+              ${isRestricted ? '' : '<button id="retry-extract-btn" class="retry-btn">Try Again</button>'}
             </div>`;
         const errorDetailEl = elements.textContent.querySelector('.error-detail');
         if (errorDetailEl) errorDetailEl.textContent = err.message || 'Extraction failed';
@@ -322,13 +326,11 @@ async function requestHostPermission(url) {
 }
 
 async function getPageContent(tab) {
-  if (!tab || !tab.url) return null;
-
-  // Block pages where content scripts cannot be injected
-  if (/^(chrome|about|chrome-extension|moz-extension):/.test(tab.url)) {
+  // Block pages where content scripts cannot be injected (including when activeTab withholds tab.url)
+  if (isRestrictedUrl(tab?.url)) {
     // Special case: Chrome's built-in PDF viewer (chrome-extension://...?pdfUrl)
     // Detect it by checking the query string for a PDF URL
-    if (/^(chrome-extension|moz-extension):\/\//.test(tab.url)) {
+    if (tab?.url && /^(chrome-extension|moz-extension):\/\//.test(tab.url)) {
       try {
         const extUrl = new URL(tab.url);
         // Chrome's native PDF viewer encodes the PDF URL as a query param or hash
@@ -342,7 +344,7 @@ async function getPageContent(tab) {
         }
       } catch (e) { /* Not a PDF viewer tab */ }
     }
-    return null;
+    throw new Error(RESTRICTED_PAGE_MSG);
   }
 
   const url = new URL(tab.url);
@@ -426,6 +428,7 @@ async function getPageContent(tab) {
       }
     } catch (injectErr) {
       console.error("Popup: Script injection and retry failed:", injectErr);
+      response = { error: injectErr.message };
     }
   }
 
@@ -434,7 +437,9 @@ async function getPageContent(tab) {
   }
   
   let errMsg = response ? response.error || "Extraction failed." : "Extraction failed.";
-  if (/receiving end does not exist/i.test(errMsg)) {
+  if (/extensions gallery|cannot be scripted|cannot access|missing host permission/i.test(errMsg)) {
+      errMsg = RESTRICTED_PAGE_MSG;
+  } else if (/receiving end does not exist/i.test(errMsg)) {
       errMsg = "Extension was updated or lost connection. Please refresh this webpage and try again.";
   }
   throw new Error(errMsg);

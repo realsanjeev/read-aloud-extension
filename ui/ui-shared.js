@@ -140,7 +140,7 @@ export function setupVoiceSelection(uiState, elements, onVoicesChanged = null) {
         elements.voiceSelect.appendChild(optgroup);
       });
 
-      if (uiState.settings.voiceName) {
+      if (uiState.settings.voiceName && voices.some(v => v.name === uiState.settings.voiceName)) {
         elements.voiceSelect.value = uiState.settings.voiceName;
       } else {
         uiState.settings.voiceName = elements.voiceSelect.value;

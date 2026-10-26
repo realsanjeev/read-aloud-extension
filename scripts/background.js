@@ -68,7 +68,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId !== 'read-aloud') return;
     if (!tab || !tab.id || !tab.url) return;
 
-    const blocked = /^(chrome|about|chrome-extension|moz-extension):/.test(tab.url);
+    const blocked = !/^(https?|file):/i.test(tab.url) || /^https?:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore|addons\.mozilla\.org|microsoftedge\.microsoft\.com\/addons)(\/|$)/i.test(tab.url);
     if (blocked) return;
 
     try {

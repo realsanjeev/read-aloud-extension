@@ -94,6 +94,7 @@ async function loadPdfFromSource(sourceUrl) {
     elements.textContent.innerHTML = '<p class="placeholder-text">Loading PDF and extracting text...</p>';
     showTextArea();
 
+    let pdfData = sourceUrl;
     if (!sourceUrl.startsWith('file://')) {
       const origins = [new URL(sourceUrl).origin + '/*'];
       if (!(await chrome.permissions.contains({ origins }))) {
@@ -113,8 +114,11 @@ async function loadPdfFromSource(sourceUrl) {
           };
         });
       }
+      const response = await fetch(sourceUrl);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      pdfData = new Uint8Array(await response.arrayBuffer());
     }
-    await startReading(await extractPdfText(sourceUrl), sourceUrl);
+    await startReading(await extractPdfText(pdfData), sourceUrl);
   } catch (err) {
     console.error("PDF load failed:", err);
     elements.textContent.innerHTML = `
