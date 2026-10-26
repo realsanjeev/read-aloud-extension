@@ -1,13 +1,7 @@
 // ui-shared.js - Shared UI logic for popup and pdf-viewer
 import { debounce } from './utils.js';
 
-export const MAX_VOICE_RETRIES = 20;
-
-export function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.appendChild(document.createTextNode(str));
-  return div.innerHTML;
-}
+const MAX_VOICE_RETRIES = 20;
 
 export function createBaseState() {
   return {
@@ -84,12 +78,13 @@ export async function loadSharedSettings(uiState, elements) {
   if (elements.chkMiniPlayer) elements.chkMiniPlayer.checked = uiState.settings.miniPlayer;
 }
 
-export function setupVoiceSelection(uiState, elements, voiceRetryRef, onVoicesChanged = null) {
+export function setupVoiceSelection(uiState, elements, onVoicesChanged = null) {
+  let retries = 0;
   const updateVoices = () => {
     const voices = window.speechSynthesis.getVoices();
     if (voices.length === 0) {
-      if (voiceRetryRef.count < MAX_VOICE_RETRIES) {
-        voiceRetryRef.count++;
+      if (retries < MAX_VOICE_RETRIES) {
+        retries++;
         setTimeout(updateVoices, 200);
       } else {
         if (elements.voiceError) elements.voiceError.classList.remove('hidden');
@@ -147,6 +142,9 @@ export function setupVoiceSelection(uiState, elements, voiceRetryRef, onVoicesCh
 
       if (uiState.settings.voiceName) {
         elements.voiceSelect.value = uiState.settings.voiceName;
+      } else {
+        uiState.settings.voiceName = elements.voiceSelect.value;
+        if (uiState.sentences.length) sendSettings(uiState);
       }
     }
     if (onVoicesChanged) onVoicesChanged(voices);
@@ -302,7 +300,7 @@ export function sendCommand(type, payload = {}) {
  * Persist current settings to chrome.storage.sync.
  */
 export function saveSettings(uiState) {
-  chrome.storage.sync.set(uiState.settings);
+  return chrome.storage.sync.set(uiState.settings);
 }
 
 /**
@@ -454,13 +452,8 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
 
   if (elements.btnTestVoice) {
     elements.btnTestVoice.onclick = () => {
-      if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
-        uiState.settings.voiceName = elements.voiceSelect.value;
-        saveSettings(uiState);
-        sendSettings(uiState);
-      }
       sendCommand('TEST', {
-        voiceName: uiState.settings.voiceName || (elements.voiceSelect ? elements.voiceSelect.value : null),
+        voiceName: uiState.settings.voiceName,
         rate: uiState.settings.rate,
         pitch: uiState.settings.pitch,
         volume: uiState.settings.volume
@@ -472,7 +465,7 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
     elements.btnReset.onclick = async () => {
       if (!confirm('Reset all settings to defaults? This cannot be undone.')) return;
       const defaultSettings = {
-        voiceName: null,
+        voiceName: elements.voiceSelect ? elements.voiceSelect.value : null,
         rate: 1.0,
         pitch: 1.0,
         volume: 1.0,
@@ -500,11 +493,6 @@ export function wirePlayerControls(uiState, elements, playGuard = null) {
   if (elements.btnPlay) {
     elements.btnPlay.onclick = () => {
       if (playGuard && playGuard()) return;
-      if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
-        uiState.settings.voiceName = elements.voiceSelect.value;
-        saveSettings(uiState);
-        sendSettings(uiState);
-      }
       sendCommand('TOGGLE_PLAY');
     };
   }

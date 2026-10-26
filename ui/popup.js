@@ -46,12 +46,10 @@ uiState.settings.miniPlayer = true; // Popup specific default
 
 let voices = [];
 let contentReady = false;
-let voiceRetryRef = { count: 0 };
 
 // --- Voice Auto-Selection ---
 async function autoSelectVoice(text) {
-  if (uiState.settings.voiceName || voices.length === 0) return;
-  if (!chrome.i18n.detectLanguage) return;
+  if (voices.length === 0 || !chrome.i18n.detectLanguage) return;
   try {
     const result = await new Promise((resolve, reject) => {
       chrome.i18n.detectLanguage(text, (res) => {
@@ -169,10 +167,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (elements.btnDownload) elements.btnDownload.disabled = true;
 
   await shared.loadSharedSettings(uiState, elements);
+  const hadSavedVoice = !!uiState.settings.voiceName;
   shared.applyTheme(uiState.settings.theme, elements.iconTheme);
   
   // Set up voice selection using UI elements
-  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef, (v) => {
+  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, (v) => {
     voices = v;
   });
 
@@ -233,16 +232,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (text) {
           contentReady = true;
           updatePlayButtonState();
-          await autoSelectVoice(text);
+          if (!hadSavedVoice) await autoSelectVoice(text);
           const saved = await getSavedPosition(currentTab.url);
           if (saved && saved.index > 0) {
             showResumePrompt(saved.index, text, currentTab.id, currentTab.url);
           } else {
             const autoPlay = isDifferentPage && wasPlaying;
-            if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
-              uiState.settings.voiceName = elements.voiceSelect.value;
-              shared.saveSettings(uiState);
-            }
             shared.sendCommand('INIT', { text, index: 0, settings: uiState.settings, tabId: currentTab.id, tabUrl: currentTab.url, autoPlay });
           }
           if (uiState.settings.miniPlayer) updateMiniPlayer(true);
@@ -283,15 +278,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // --- Communication ---
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (sender.id && sender.id !== chrome.runtime.id) {
-    console.warn("Unauthorized message origin:", sender.id);
-    return false;
-  }
-
+chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'UPDATE_UI') {
     handleUpdateUI(msg.state);
-    return false;
   }
   return false;
 });
@@ -304,10 +293,6 @@ function showResumePrompt(savedIndex, text, tabId, tabUrl) {
   const dismiss = (index) => {
     clearTimeout(autoDismiss);
     elements.resumePrompt.classList.add('hidden');
-    if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
-      uiState.settings.voiceName = elements.voiceSelect.value;
-      shared.saveSettings(uiState);
-    }
     shared.sendCommand('INIT', { text, index, settings: uiState.settings, tabId, tabUrl });
   };
 

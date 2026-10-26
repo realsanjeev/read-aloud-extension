@@ -43,16 +43,7 @@ if (m.permissions) {
 // Firefox ignores minimum_chrome_version
 delete m.minimum_chrome_version;
 
-// Firefox AMO requires an explicit ID and data_collection_permissions for MV3 extensions
-m.browser_specific_settings = {
-  gecko: {
-    id: 'speak-aloud@realsanjeev.com',
-    strict_min_version: '128.0',
-    data_collection_permissions: {
-      required: ['none']
-    }
-  }
-};
+// browser_specific_settings (gecko id, data_collection_permissions) lives in manifest.json
 
 fs.writeFileSync('manifest.json', JSON.stringify(m, null, 2));
 "
