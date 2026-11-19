@@ -1,264 +1,226 @@
-// background.js - Orchestrator for Speak Aloud Extension
+// background.js - Orchestrator: page extraction, settings, and routing commands to the TTS player.
+// Chrome: the player is an offscreen document. Firefox: an iframe in this background page.
+// Both are reached with chrome.runtime.sendMessage, flagged _forwarded.
 
-let offscreenCreating = null;
-const OFFSCREEN_DOCUMENT_PATH = chrome.runtime.getURL('ui/offscreen.html');
+const PLAYER_URL = chrome.runtime.getURL('ui/offscreen.html');
+const isFirefox = !chrome.offscreen;
 
-// Commands from UI / content scripts that are proxied to the offscreen player
-const OFFSCREEN_COMMANDS = new Set([
-    'PAUSE', 'STOP', 'TOGGLE_PLAY', 'NEXT', 'PREV', 'NEXT_PARA', 'PREV_PARA',
-    'JUMP', 'INIT', 'UPDATE_SETTINGS', 'TEST', 'GET_STATE'
+// Commands from UI / content scripts that are proxied to the player
+const PLAYER_COMMANDS = new Set([
+    'PAUSE', 'STOP', 'TOGGLE_PLAY', 'NEXT', 'PREV', 'NEXT_PARA', 'PREV_PARA', 'JUMP', 'TEST', 'GET_STATE'
 ]);
+const PLAYER_SETTINGS = ['voiceName', 'rate', 'pitch', 'volume', 'highlightMode'];
 
-// Firefox fallback state
-const isFirefoxBackgroundPage = typeof chrome.offscreen === 'undefined' && typeof document !== 'undefined';
-const pendingCallbacks = new Map();
-let messageIdCounter = 0;
+const STORE_URL = /^https?:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore|addons\.mozilla\.org|microsoftedge\.microsoft\.com\/addons)(\/|$)/i;
+const isRestrictedUrl = (url) => !url || !/^(https?|file):/i.test(url) || STORE_URL.test(url);
 
-// Register message listener once for Firefox iframe responses
-if (isFirefoxBackgroundPage) {
-    window.addEventListener('message', (event) => {
-        if (event.data && event.data.responseTo) {
-            const callback = pendingCallbacks.get(event.data.responseTo);
-            if (callback) {
-                pendingCallbacks.delete(event.data.responseTo);
-                const _ = chrome.runtime.lastError; // suppress stale lastError from prior chrome.* calls
-                callback(event.data.response);
-            }
-        }
-    });
+chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' });
+
+// --- Player lifecycle ---
+
+let playerCreating = null;
+
+async function hasPlayer() {
+    if (isFirefox) return !!document.getElementById('player');
+    const contexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+    return contexts.length > 0;
 }
 
-function sendToOffscreen(msg, callback) {
-    if (isFirefoxBackgroundPage) {
-        const iframe = document.getElementById('firefox-offscreen-iframe');
-        if (iframe && iframe.contentWindow) {
-            const msgId = ++messageIdCounter;
-            msg._messageId = msgId;
-            if (callback) {
-                pendingCallbacks.set(msgId, (response) => {
-                    const _ = chrome.runtime.lastError; // suppress stale lastError from prior chrome.* calls
-                    callback(response);
-                });
-            }
-            iframe.contentWindow.postMessage(msg, '*');
-        } else if (callback) {
-            callback({ status: 'error', message: 'Offscreen iframe not found' });
-        }
-    } else {
-        if (callback) {
-            chrome.runtime.sendMessage(msg, callback);
+/**
+ * Creates the player if needed. A fresh player (Chrome closed the offscreen document, or
+ * Firefox unloaded the background page) is re-loaded from the session, paused at the last index.
+ * The in-flight promise covers the existence check, so concurrent callers can't create two.
+ */
+function ensurePlayer() {
+    return (playerCreating ??= (async () => {
+        if (await hasPlayer()) return;
+        if (isFirefox) {
+            const iframe = document.createElement('iframe');
+            iframe.id = 'player';
+            iframe.src = PLAYER_URL;
+            const loaded = new Promise(r => (iframe.onload = r));
+            document.body.appendChild(iframe);
+            await loaded;
         } else {
-            chrome.runtime.sendMessage(msg, () => {
-                const _ = chrome.runtime.lastError;
+            await chrome.offscreen.createDocument({
+                url: PLAYER_URL,
+                reasons: ['AUDIO_PLAYBACK'],
+                justification: 'Text-to-Speech playback',
             });
         }
+        const { session, sessionIndex = 0 } = await chrome.storage.session.get(['session', 'sessionIndex']);
+        if (session) await toPlayer({ type: 'INIT', ...session, index: sessionIndex, settings: await chrome.storage.sync.get(PLAYER_SETTINGS) });
+    })().finally(() => {
+        playerCreating = null;
+    }));
+}
+
+function toPlayer(msg) {
+    return chrome.runtime.sendMessage({ ...msg, _forwarded: true });
+}
+
+async function sendPlayerCommand(msg) {
+    await ensurePlayer();
+    return toPlayer(msg);
+}
+
+async function startReading({ text, index = 0, tabId = null, tabUrl = null, autoPlay = false }) {
+    // Kept so a fresh player can pick up where this one left off
+    await chrome.storage.session.set({ session: { text, tabId, tabUrl }, sessionIndex: index }).catch(() => {});
+    return sendPlayerCommand({ type: 'INIT', text, index, tabId, tabUrl, autoPlay, settings: await chrome.storage.sync.get(PLAYER_SETTINGS) });
+}
+
+async function stopIfReading(tabId) {
+    const { session } = await chrome.storage.session.get('session');
+    if (!tabId || session?.tabId !== tabId) return;
+    await chrome.storage.session.remove(['session', 'sessionIndex']);
+    if (await hasPlayer()) toPlayer({ type: 'UNLOAD' }).catch(() => {});
+}
+
+function onPlayerUpdate(state) {
+    if (state.wordBoundary) return; // word ticks only matter to the popup / PDF viewer
+    const active = state.totalSentences > 0 && (state.isPlaying || state.isPaused);
+    chrome.action.setBadgeText({ text: active ? `${Math.round(((state.currentIndex + 1) / state.totalSentences) * 100)}%` : '' });
+    if (active) chrome.storage.session.set({ sessionIndex: state.currentIndex });
+    // Mini-player sync
+    if (state.tabId) chrome.tabs.sendMessage(state.tabId, { type: 'UPDATE_UI', state }).catch(() => {});
+}
+
+// --- Settings: UI pages write chrome.storage.sync; the player follows it from here.
+// Unset keys keep the player's own defaults. ---
+
+chrome.storage.onChanged.addListener(async (changes, area) => {
+    if (area !== 'sync') return;
+    const settings = Object.fromEntries(PLAYER_SETTINGS.filter(k => k in changes).map(k => [k, changes[k].newValue]));
+    if (Object.keys(settings).length && await hasPlayer()) {
+        toPlayer({ type: 'UPDATE_SETTINGS', settings }).catch(() => {});
+    }
+});
+
+// --- Extraction ---
+
+function openPdfViewer(url) {
+    chrome.tabs.create({ url: chrome.runtime.getURL('ui/pdf-viewer.html') + '?url=' + encodeURIComponent(url) });
+    return { pdf: true };
+}
+
+/**
+ * Resolves { text } or { pdf: true } (handed to the PDF viewer).
+ * Throws with err.restricted for pages extensions can't touch, or err.pdfFallback when the page couldn't be scripted but may be a PDF
+ * (Firefox's built-in PDF viewer can't be injected into).
+ */
+async function extractText(tab) {
+    if (isRestrictedUrl(tab?.url)) {
+        throw Object.assign(new Error("Browser security blocks extensions on internal pages and extension stores. Open any regular webpage to use Read Aloud."), { restricted: true });
+    }
+    if (new URL(tab.url).pathname.toLowerCase().endsWith('.pdf')) return openPdfViewer(tab.url);
+
+    let result;
+    try {
+        // Leading '/': Firefox resolves paths from the extension root only with it
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['/lib/Readability.js', '/scripts/content.js'] });
+        [{ result }] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => document.contentType === 'application/pdf' ? { pdf: true } : { text: window.__readAloudExtract() }
+        });
+    } catch (e) {
+        console.warn('Background: injection failed:', e.message);
+        if (tab.url.startsWith('file:')) {
+            throw new Error('To read local files, enable "Allow access to file URLs" for this extension in your browser\'s extension settings.');
+        }
+        const err = new Error("This page can't be read directly. If it's a PDF, open it in the PDF reader.");
+        err.pdfFallback = true;
+        throw err;
+    }
+    // PDFs served without a .pdf extension (e.g. https://arxiv.org/pdf/2301.00018)
+    return result?.pdf ? openPdfViewer(tab.url) : { text: result?.text || null };
+}
+
+// Context menu / keyboard shortcut: read a tab from the start without the popup
+async function readTab(tab) {
+    const { text } = await extractText(tab);
+    if (!text) return;
+    await startReading({ text, tabId: tab.id, tabUrl: tab.url, autoPlay: true });
+    const { miniPlayer } = await chrome.storage.sync.get('miniPlayer');
+    if (miniPlayer !== false) {
+        chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_MINI_PLAYER', visible: true }).catch(() => {});
     }
 }
 
-// --- Context Menu ---
+// --- Saved positions ---
+
+async function prunePositions() {
+    const all = await chrome.storage.local.get(null);
+    const old = Object.keys(all)
+        .filter(k => k.startsWith('pos_'))
+        .sort((a, b) => all[b].timestamp - all[a].timestamp)
+        .slice(200);
+    if (old.length) await chrome.storage.local.remove(old);
+}
+
+// --- Events ---
+
 chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.create({
         id: 'read-aloud',
         title: 'Read Aloud',
         contexts: ['page', 'selection']
     });
+    prunePositions();
+});
+chrome.runtime.onStartup.addListener(prunePositions);
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId === 'read-aloud') readTab(tab).catch(e => console.warn('Context menu Read Aloud failed:', e.message));
 });
 
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-    if (info.menuItemId !== 'read-aloud') return;
-    if (!tab || !tab.id || !tab.url) return;
-
-    const blocked = !/^(https?|file):/i.test(tab.url) || /^https?:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore|addons\.mozilla\.org|microsoftedge\.microsoft\.com\/addons)(\/|$)/i.test(tab.url);
-    if (blocked) return;
-
-    try {
-        await ensureOffscreen();
-
-        // Inject files sequentially for Firefox compatibility
-        await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            files: ['/lib/Readability.js']
-        });
-        await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            files: ['/scripts/content.js']
-        });
-
-        const response = await new Promise((resolve) => {
-            chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_CONTENT' }, (res) => {
-                if (chrome.runtime.lastError) resolve({ error: chrome.runtime.lastError.message });
-                else resolve(res);
-            });
-        });
-
-        const text = response ? response.result : null;
-        if (!text) return;
-
-        // Load settings
-        const data = await chrome.storage.sync.get([
-            'voiceName', 'rate', 'pitch', 'volume', 'highlightMode', 'miniPlayer'
-        ]);
-
-        const settings = {
-            voiceName: data.voiceName || null,
-            rate: parseFloat(data.rate) || 1.0,
-            pitch: parseFloat(data.pitch) || 1.0,
-            volume: parseFloat(data.volume) || 1.0,
-            highlightMode: data.highlightMode || 'sentence'
-        };
-
-        await new Promise((resolve) => {
-            sendToOffscreen({
-                type: 'INIT',
-                _forwarded: true,
-                text,
-                index: 0,
-                settings,
-                tabId: tab.id,
-                tabUrl: tab.url,
-                autoPlay: true
-            }, (res) => resolve(res));
-        });
-
-        // Show mini-player unless the user disabled it
-        if (data.miniPlayer !== false) {
-            chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_MINI_PLAYER', visible: true }).catch(() => {});
-        }
-    } catch (e) {
-        console.error("Context menu Read Aloud failed:", e);
-    }
-});
-
-/**
- * Checks if the offscreen document is already created.
- * Uses chrome.runtime.getContexts (Chrome 116+) or self.clients.matchAll() as a fallback (Chrome 109-115).
- */
-async function hasOffscreenDocument() {
-    if (isFirefoxBackgroundPage) {
-        return !!document.getElementById('firefox-offscreen-iframe');
-    }
-
-    if (chrome.runtime.getContexts) {
-        try {
-            const existingContexts = await chrome.runtime.getContexts({
-                contextTypes: ['OFFSCREEN_DOCUMENT'],
-                documentUrls: [OFFSCREEN_DOCUMENT_PATH]
-            });
-            return existingContexts.length > 0;
-        } catch (e) {
-            console.warn("Background: getContexts failed:", e);
-        }
-    }
-    // Fallback for Chrome 109-115 using Service Worker clients
-    try {
-        const clients = await self.clients.matchAll();
-        return clients.some(client => client.url === OFFSCREEN_DOCUMENT_PATH);
-    } catch (e) {
-        console.warn("Background: self.clients.matchAll failed:", e);
-        return false;
-    }
-}
-
-
-/**
- * Ensures the offscreen document is created and ready to receive messages.
- * The in-flight promise covers the existence check too, so concurrent callers
- * can't both decide to create the document (createDocument throws on a second one).
- */
-function ensureOffscreen() {
-    return (offscreenCreating ??= (async () => {
-        if (await hasOffscreenDocument()) return;
-        if (isFirefoxBackgroundPage) {
-            const iframe = document.createElement('iframe');
-            iframe.id = 'firefox-offscreen-iframe';
-            iframe.src = OFFSCREEN_DOCUMENT_PATH;
-            document.body.appendChild(iframe);
-            await new Promise(r => (iframe.onload = r));
-        } else {
-            await chrome.offscreen.createDocument({
-                url: OFFSCREEN_DOCUMENT_PATH,
-                reasons: ['AUDIO_PLAYBACK'],
-                justification: 'Text-to-Speech playback',
-            });
-        }
-    })().finally(() => {
-        offscreenCreating = null;
-    }));
-}
-
-// Proxy messages to offscreen
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-
-    if (msg.type === 'UPDATE_UI' && msg.state) {
-        const { sentences, currentIndex, isPlaying, isPaused, tabId } = msg.state;
-        if (sentences && sentences.length > 0 && (isPlaying || isPaused)) {
-            const progress = Math.round(((currentIndex + 1) / sentences.length) * 100);
-            chrome.action.setBadgeText({ text: `${progress}%` });
-            chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' }); // Green progress
-        } else {
-            chrome.action.setBadgeText({ text: '' });
-        }
-
-        // Forward state update to the specific tab content script for mini-player sync
-        if (tabId) {
-            chrome.tabs.sendMessage(tabId, msg, () => {
-                if (chrome.runtime.lastError) {
-                    // Ignore errors if the tab was closed or content script is not listening yet
-                }
-            });
-        }
-        return false;
+    let reply;
+    switch (msg.type) {
+        case 'UPDATE_UI':
+            if (msg.state) onPlayerUpdate(msg.state);
+            return;
+        case 'PAGE_LEFT':
+            stopIfReading(sender.tab?.id);
+            return;
+        case 'SAVE_POSITION':
+            reply = chrome.storage.local.set({ ['pos_' + msg.url]: { url: msg.url, index: msg.index, timestamp: Date.now() } });
+            break;
+        case 'EXTRACT_TAB':
+            reply = extractText(msg.tab).catch(e => ({ error: e.message, restricted: !!e.restricted, pdfFallback: !!e.pdfFallback }));
+            break;
+        case 'INIT':
+            reply = startReading(msg);
+            break;
+        default:
+            if (!PLAYER_COMMANDS.has(msg.type)) return;
+            reply = sendPlayerCommand(msg);
     }
-
-    // Forward player commands to offscreen
-    if (OFFSCREEN_COMMANDS.has(msg.type)) {
-        if (msg._forwarded) return; // Prevent infinite recursion
-
-        ensureOffscreen().then(() => {
-            sendToOffscreen({ ...msg, _forwarded: true }, (response) => {
-                if (chrome.runtime.lastError) {
-                    console.warn("Proxy error:", chrome.runtime.lastError.message);
-                    sendResponse({ status: 'error', message: chrome.runtime.lastError.message });
-                } else {
-                    sendResponse(response);
-                }
-            });
-        }).catch(err => {
-            console.error("Background: Failed to ensure offscreen:", err);
-            sendResponse({ status: 'error', message: err.message });
-        });
-        return true;
-    }
+    reply.then(sendResponse, (e) => sendResponse({ status: 'error', message: e.message }));
+    return true;
 });
 
-// Listen for keyboard commands
-chrome.commands.onCommand.addListener(async (command) => {
+const COMMANDS = {
+    play_stop: 'TOGGLE_PLAY',
+    pause_resume: 'PAUSE',
+    forward: 'NEXT',
+    rewind: 'PREV',
+    next_paragraph: 'NEXT_PARA',
+    prev_paragraph: 'PREV_PARA'
+};
+
+chrome.commands.onCommand.addListener(async (command, tab) => {
+    if (!COMMANDS[command]) return;
     try {
-        await ensureOffscreen();
-        const msgMap = {
-            'play_stop': 'TOGGLE_PLAY',
-            'pause_resume': 'PAUSE',
-            'forward': 'NEXT',
-            'rewind': 'PREV',
-            'next_paragraph': 'NEXT_PARA',
-            'prev_paragraph': 'PREV_PARA'
-        };
-        if (msgMap[command]) {
-            sendToOffscreen({ type: msgMap[command], _forwarded: true });
+        if (command === 'play_stop') {
+            // Nothing playing and this tab isn't the loaded one: start reading it
+            const { state } = (await sendPlayerCommand({ type: 'GET_STATE' })) || {};
+            if (!state?.isPlaying && !state?.isPaused && state?.tabId !== tab?.id) return await readTab(tab);
         }
+        await sendPlayerCommand({ type: COMMANDS[command] });
     } catch (e) {
-        console.error("Keyboard command failed:", e);
+        console.warn('Keyboard command failed:', e.message);
     }
 });
 
-// Stop playback if the tab being read is closed
-chrome.tabs.onRemoved.addListener(async (closedTabId) => {
-    try {
-        const hasDoc = await hasOffscreenDocument();
-        if (hasDoc) {
-            sendToOffscreen({ type: 'STOP_IF_TAB', tabId: closedTabId, _forwarded: true });
-        }
-    } catch (e) {
-        // Ignore errors during tab close check
-    }
-});
+chrome.tabs.onRemoved.addListener(stopIfReading);

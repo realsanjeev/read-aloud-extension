@@ -1,8 +1,9 @@
 // pdf-viewer.js - PDF Viewer with integrated TTS controls
 import { getSavedPosition } from './utils.js';
 import * as shared from './ui-shared.js';
+import * as pdfjsLib from '../lib/pdf.min.mjs';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
+pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.mjs');
 
 // --- DOM Elements ---
 const elements = {
@@ -71,7 +72,9 @@ async function startReading(text, positionKey) {
   contentReady = true;
   const saved = await getSavedPosition(positionKey);
   const index = saved && saved.index > 0 ? saved.index : 0;
-  shared.sendCommand('INIT', { text, index, settings: uiState.settings, tabUrl: positionKey });
+  // This tab's id lets the background stop playback when the viewer is closed
+  const tabId = (await chrome.tabs.getCurrent())?.id;
+  shared.sendCommand('INIT', { text, index, tabId, tabUrl: positionKey });
   updatePlayButtonState();
 }
 
@@ -214,38 +217,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
-  if (pdfUrl.startsWith('file://')) {
-    if (typeof chrome.extension !== 'undefined' && chrome.extension.isAllowedFileSchemeAccess) {
-      chrome.extension.isAllowedFileSchemeAccess(async (isAllowed) => {
-        if (!isAllowed) {
-          console.warn("Extension does not have access to file URLs.");
-          elements.textContent.innerHTML = `
-            <div style="padding: 20px; text-align: center;">
-              <p class="error" style="font-weight: bold; margin-bottom: 12px; color: #ef4444;">Local PDF URL Blocked by Chrome</p>
-              <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 20px; line-height: 1.6;">
-                Chrome extensions require explicit permission to read local files directly.
-              </p>
-              <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 24px; line-height: 1.6;">
-                Please drag and drop your local PDF below to read it instantly, or go to <strong style="color: var(--primary-color)">chrome://extensions</strong>, find "Read Aloud Extension", and check "Allow access to file URLs".
-              </p>
-            </div>
-          `;
-          elements.dropZone.classList.remove('hidden');
-        } else {
-          await loadPdfFromSource(pdfUrl);
-        }
-      });
-    } else {
-      await loadPdfFromSource(pdfUrl);
-    }
-  } else {
-    await loadPdfFromSource(pdfUrl);
+  // Firefox never grants extensions file:// access; Chrome does only when the user enables it
+  if (pdfUrl.startsWith('file://') && !(await chrome.extension.isAllowedFileSchemeAccess())) {
+    elements.textContent.innerHTML = `
+      <div style="padding: 20px; text-align: center;">
+        <p class="error" style="font-weight: bold; margin-bottom: 12px; color: #ef4444;">Local PDF Blocked by the Browser</p>
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 24px; line-height: 1.6;">
+          Drop the PDF below to read it. In Chrome you can instead enable "Allow access to file URLs" for this extension in its details page.
+        </p>
+      </div>
+    `;
+    elements.dropZone.classList.remove('hidden');
+    return;
   }
+  await loadPdfFromSource(pdfUrl);
 });
 
 async function extractPdfText(source) {
-  const param = (source instanceof Uint8Array) ? { data: source } : source;
-  const loadingTask = pdfjsLib.getDocument(param);
+  const param = (source instanceof Uint8Array) ? { data: source } : { url: source };
+  const loadingTask = pdfjsLib.getDocument({ ...param, isEvalSupported: false });
   const pdf = await loadingTask.promise;
   let fullText = "";
 

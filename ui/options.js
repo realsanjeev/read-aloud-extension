@@ -27,17 +27,5 @@ document.addEventListener('DOMContentLoaded', async () => {
   shared.applyTheme(uiState.settings.theme, elements.iconTheme);
   shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError });
 
-  shared.wireSettingsListeners(uiState, elements, {
-    onMiniPlayerChange: async (checked) => {
-      // Toggle mini player on the active tab if it's currently injected
-      try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tab && tab.id) {
-           chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_MINI_PLAYER', visible: checked }).catch(() => {});
-        }
-      } catch (e) {
-        console.warn("Could not message active tab", e);
-      }
-    }
-  });
+  shared.wireSettingsListeners(uiState, elements);
 });

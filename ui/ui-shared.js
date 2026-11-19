@@ -144,7 +144,6 @@ export function setupVoiceSelection(uiState, elements, onVoicesChanged = null) {
         elements.voiceSelect.value = uiState.settings.voiceName;
       } else {
         uiState.settings.voiceName = elements.voiceSelect.value;
-        if (uiState.sentences.length) sendSettings(uiState);
       }
     }
     if (onVoicesChanged) onVoicesChanged(voices);
@@ -192,8 +191,13 @@ export function handleUpdateUI(uiState, state, callbacks) {
 
 export function renderSentences(uiState, container, sendJumpCommand) {
   container.innerHTML = "";
+  const breaks = new Set(uiState.lineBreaks);
+  container.onclick = (e) => {
+    const sentenceEl = e.target.closest('[data-index]');
+    if (sentenceEl) sendJumpCommand(Number(sentenceEl.dataset.index));
+  };
   uiState.sentences.forEach((sentence, index) => {
-    if (uiState.lineBreaks && uiState.lineBreaks.includes(index)) {
+    if (breaks.has(index)) {
       container.appendChild(document.createElement('br'));
       container.appendChild(document.createElement('br'));
     }
@@ -214,7 +218,6 @@ export function renderSentences(uiState, container, sendJumpCommand) {
     }
     span.id = `sentence-${index}`;
     span.dataset.index = index;
-    span.onclick = () => sendJumpCommand(index);
     container.appendChild(span);
   });
 }
@@ -290,24 +293,18 @@ export function highlightWord(uiState, textContent, boundary) {
 }
 
 /**
- * Send a command message to the background service worker.
+ * Send a command message to the background.
  */
 export function sendCommand(type, payload = {}) {
-  chrome.runtime.sendMessage({ type, ...payload });
+  return chrome.runtime.sendMessage({ type, ...payload }).catch((e) => console.warn(`${type} failed:`, e.message));
 }
 
 /**
- * Persist current settings to chrome.storage.sync.
+ * Persist current settings to chrome.storage.sync. The background forwards
+ * player-relevant changes (voice, rate, pitch, volume, highlight mode) to the player.
  */
 export function saveSettings(uiState) {
   return chrome.storage.sync.set(uiState.settings);
-}
-
-/**
- * Push current settings to the offscreen player via UPDATE_SETTINGS.
- */
-export function sendSettings(uiState) {
-  sendCommand('UPDATE_SETTINGS', { settings: uiState.settings });
 }
 
 /**
@@ -320,7 +317,6 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
   const debouncedSave = debounce(() => saveSettings(uiState), 300);
 
   if (elements.rateRange) {
-    let rateInputTimer = null;
     elements.rateRange.oninput = (e) => {
       uiState.settings.rate = parseFloat(e.target.value);
       if (elements.rateValue) elements.rateValue.textContent = e.target.value + "x";
@@ -329,16 +325,9 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
           btn.classList.toggle('active', parseFloat(btn.dataset.rate) === uiState.settings.rate);
         });
       }
-      debouncedSave();
-      // Apply rate in real-time during drag
-      if (rateInputTimer) clearTimeout(rateInputTimer);
-      rateInputTimer = setTimeout(() => sendSettings(uiState), 50);
+      debouncedSave(); // applies mid-drag once the slider rests
     };
-    elements.rateRange.onchange = () => {
-      if (rateInputTimer) clearTimeout(rateInputTimer);
-      saveSettings(uiState);
-      sendSettings(uiState);
-    };
+    elements.rateRange.onchange = () => saveSettings(uiState);
   }
 
   if (elements.ratePresets) {
@@ -355,7 +344,6 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
         });
         
         saveSettings(uiState);
-        sendSettings(uiState);
       }
     };
   }
@@ -366,10 +354,7 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
       if (elements.pitchValue) elements.pitchValue.textContent = e.target.value;
       debouncedSave();
     };
-    elements.pitchRange.onchange = () => {
-      saveSettings(uiState);
-      sendSettings(uiState);
-    };
+    elements.pitchRange.onchange = () => saveSettings(uiState);
   }
 
   if (elements.volumeRange) {
@@ -378,17 +363,13 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
       if (elements.volumeValue) elements.volumeValue.textContent = e.target.value;
       debouncedSave();
     };
-    elements.volumeRange.onchange = () => {
-      saveSettings(uiState);
-      sendSettings(uiState);
-    };
+    elements.volumeRange.onchange = () => saveSettings(uiState);
   }
 
   if (elements.voiceSelect) {
     elements.voiceSelect.onchange = (e) => {
       uiState.settings.voiceName = e.target.value;
       saveSettings(uiState);
-      sendSettings(uiState);
     };
   }
 
@@ -396,7 +377,6 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
     elements.highlightModeSelect.onchange = (e) => {
       uiState.settings.highlightMode = e.target.value;
       saveSettings(uiState);
-      sendSettings(uiState);
       if (extraHandlers.onHighlightModeChange) extraHandlers.onHighlightModeChange();
     };
   }
@@ -405,7 +385,6 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
     elements.chkAutoScroll.onchange = (e) => {
       uiState.settings.autoScroll = e.target.checked;
       saveSettings(uiState);
-      sendSettings(uiState);
     };
   }
 
@@ -413,7 +392,6 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
     elements.chkMiniPlayer.onchange = (e) => {
       uiState.settings.miniPlayer = e.target.checked;
       saveSettings(uiState);
-      sendSettings(uiState);
       if (extraHandlers.onMiniPlayerChange) extraHandlers.onMiniPlayerChange(e.target.checked);
     };
   }
@@ -446,7 +424,6 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
       applyTheme(next, elements.iconTheme || null);
       updateThemeTitle(next);
       saveSettings(uiState);
-      sendSettings(uiState);
     };
   }
 
@@ -480,7 +457,6 @@ export function wireSettingsListeners(uiState, elements, extraHandlers = {}) {
       await saveSettings(uiState);
       await loadSharedSettings(uiState, elements);
       applyTheme(uiState.settings.theme, elements.iconTheme || null);
-      sendSettings(uiState);
     };
   }
 }

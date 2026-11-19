@@ -1,4 +1,8 @@
-// offscreen.js - Text-to-Speech Engine
+// offscreen.js - Text-to-Speech engine.
+// Chrome: runs in an offscreen document, where chrome.runtime is the only extension API
+// (no chrome.storage), so persistence goes through the background via messages.
+// Firefox: runs in a hidden iframe inside the background page (no offscreen API).
+// Both receive commands from the background as runtime messages flagged _forwarded.
 
 let playerState = {
     sentences: [],
@@ -7,7 +11,7 @@ let playerState = {
     isPlaying: false,
     isPaused: false,
     tabId: null,
-    tabUrl: null,  // stored at INIT so savePosition() doesn't need chrome.tabs (unavailable in offscreen)
+    tabUrl: null,  // stored at INIT so savePosition() doesn't need chrome.tabs
     settings: {
         voiceName: null,
         rate: 1.0,
@@ -21,8 +25,7 @@ let playerState = {
 let errorRetryCount = 0;
 let speakTimer = null; // pending deferred speak (Firefox gaps, error retries); cleared by cancelSpeech()
 
-// Firefox detection: in Firefox the offscreen page runs as an iframe inside
-// the background page (window.parent !== window). On Chrome it's standalone.
+// In Firefox this page is an iframe inside the background page; on Chrome it's standalone.
 const isFirefox = (window.parent !== window);
 
 // Firefox-specific timing constants (ms)
@@ -63,7 +66,7 @@ function cancelSpeech() {
     window.speechSynthesis.cancel();
 }
 
-// Settings are initialized via INIT and UPDATE_SETTINGS messages from the popup
+// Settings arrive with INIT and UPDATE_SETTINGS messages from the background
 
 function handleMessage(msg, sender, sendResponse) {
     // Ignore direct broadcasts from the popup; only accept commands proxied by the background service worker
@@ -120,19 +123,15 @@ function handleMessage(msg, sender, sendResponse) {
             testVoice(msg);
             sendResponse({ status: 'ok' });
             break;
-        case 'STOP_IF_TAB':
-            if (playerState.tabId && playerState.tabId === msg.tabId) {
-                stop().then(() => {
-                    playerState.tabId = null;
-                    playerState.tabUrl = null;
-                    playerState.sentences = [];
-                    sendUpdate(null, { fullPayload: true });
-                    sendResponse({ status: 'ok' });
-                });
-                return true;
-            }
-            sendResponse({ status: 'ignored' });
-            break;
+        case 'UNLOAD': // the tab being read closed or navigated away
+            stop().then(() => {
+                playerState.tabId = null;
+                playerState.tabUrl = null;
+                playerState.sentences = [];
+                sendUpdate(null, { fullPayload: true });
+                sendResponse({ status: 'ok' });
+            });
+            return true;
         case 'GET_STATE':
             sendUpdate(sendResponse);
             return true;
@@ -141,69 +140,43 @@ function handleMessage(msg, sender, sendResponse) {
 
 chrome.runtime.onMessage.addListener(handleMessage);
 
-// Firefox compatibility: listen to window messages from the parent background script
-window.addEventListener('message', (event) => {
-    const msg = event.data;
-    if (msg && msg.type) {
-        const sendResponse = (response) => {
-            if (msg._messageId) {
-                window.parent.postMessage({
-                    responseTo: msg._messageId,
-                    response: response
-                }, '*');
-            }
-        };
-        handleMessage(msg, {}, sendResponse);
+
+const segmenter = new Intl.Segmenter(undefined, { granularity: 'sentence' });
+
+// Online voices (notably Google's in Chrome) cut off around 15s and never fire onend,
+// which stalls playback, so long sentences are split at a clause boundary or space.
+const MAX_CHUNK = 200;
+function splitLong(s) {
+    const out = [];
+    while (s.length > MAX_CHUNK) {
+        const head = s.slice(0, MAX_CHUNK);
+        let cut = Math.max(head.lastIndexOf(', '), head.lastIndexOf('; '), head.lastIndexOf(': ')) + 1;
+        if (cut < MAX_CHUNK / 2) cut = head.lastIndexOf(' ');
+        if (cut <= 0) cut = MAX_CHUNK;
+        out.push(s.slice(0, cut).trim());
+        s = s.slice(cut).trim();
     }
-});
+    if (s) out.push(s);
+    return out;
+}
 
 /**
- * Smart sentence tokenizer that handles abbreviations, decimals, and ellipsis.
+ * Splits text into speakable sentences; lineBreaks holds the sentence index starting each paragraph.
  */
 function tokenizeSentences(text) {
-    if (!text || text.length === 0) return { sentences: [], lineBreaks: [] };
-
-    let segmenter = null;
-    try {
-        if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-            segmenter = new Intl.Segmenter(undefined, { granularity: 'sentence' });
-        }
-    } catch (e) {
-        console.warn("Intl.Segmenter not supported or failed to initialize, using regex fallback:", e);
-    }
-
     const sentences = [];
     const lineBreaks = [];
-    const lines = text.split(/\n+/);
+    if (!text) return { sentences, lineBreaks };
 
-    lines.forEach(line => {
+    for (const line of text.split(/\n+/)) {
         const trimmedLine = line.trim();
-        if (trimmedLine.length === 0) return;
-
-        if (sentences.length > 0) {
-            lineBreaks.push(sentences.length);
+        if (!trimmedLine) continue;
+        if (sentences.length > 0) lineBreaks.push(sentences.length);
+        for (const { segment } of segmenter.segment(trimmedLine)) {
+            const s = segment.trim();
+            if (s) sentences.push(...splitLong(s));
         }
-
-        if (segmenter) {
-            for (const segment of segmenter.segment(trimmedLine)) {
-                const s = segment.segment.trim();
-                if (s.length > 0) {
-                    sentences.push(s);
-                }
-            }
-        } else {
-            // Regex fallback for older browsers (Firefox < 125)
-            // Splitting by typical sentence boundaries (. ! ?) followed by whitespace
-            const segments = trimmedLine.split(/(?<=[.!?])\s+/);
-            segments.forEach(segment => {
-                const s = segment.trim();
-                if (s.length > 0) {
-                    sentences.push(s);
-                }
-            });
-        }
-    });
-
+    }
     return { sentences, lineBreaks };
 }
 
@@ -454,34 +427,19 @@ function sendUpdate(sendResponse = null, extra = {}) {
     if (sendResponse) {
         sendResponse({ type: 'UPDATE_UI', state });
     } else {
-        chrome.runtime.sendMessage({ type: 'UPDATE_UI', state }, () => {
-            if (chrome.runtime.lastError) {
-                console.debug("Offscreen: UPDATE_UI broadcast had no receivers:", chrome.runtime.lastError.message);
-            }
-        });
+        chrome.runtime.sendMessage({ type: 'UPDATE_UI', state }).catch(() => {});
     }
 }
 
 
+// Persisted by the background: chrome.storage doesn't exist in Chrome offscreen documents.
 function savePosition() {
     if (!playerState.tabUrl || playerState.sentences.length === 0) return Promise.resolve();
-    // Guard against extension context being torn down during auto-persist
-    if (!chrome.storage) return Promise.resolve();
-    const key = 'pos_' + playerState.tabUrl;
-    return new Promise((resolve) => {
-        chrome.storage.local.set({
-            [key]: {
-                url: playerState.tabUrl,
-                index: playerState.currentIndex,
-                timestamp: Date.now()
-            }
-        }, () => {
-            if (chrome.runtime.lastError) {
-                console.warn("Offscreen: savePosition failed:", chrome.runtime.lastError.message);
-            }
-            resolve();
-        });
-    });
+    return chrome.runtime.sendMessage({
+        type: 'SAVE_POSITION',
+        url: playerState.tabUrl,
+        index: playerState.currentIndex
+    }).catch((e) => console.warn("Offscreen: savePosition failed:", e.message));
 }
 
 function testVoice(msg = {}) {
