@@ -10,6 +10,7 @@ let playerState = {
     currentIndex: 0,
     isPlaying: false,
     isPaused: false,
+    finished: false, // reached the end; the background continues on the next page
     tabId: null,
     tabUrl: null,  // stored at INIT so savePosition() doesn't need chrome.tabs
     settings: {
@@ -203,12 +204,11 @@ function initPlayer(text, startIndex, settings = null, autoPlay = false, tabId =
     
     playerState.isPlaying = autoPlay;
     playerState.isPaused = false;
+    playerState.finished = false;
 
-    if (autoPlay) {
-        speakCurrentSentence();
-    } else {
-        sendUpdate(null, { fullPayload: true });
-    }
+    // New text must reach the popup / PDF viewer even when playback starts right away
+    sendUpdate(null, { fullPayload: !!text });
+    if (autoPlay) speakCurrentSentence();
 }
 
 function updateSettings(newSettings) {
@@ -228,6 +228,7 @@ function play() {
     
     playerState.isPlaying = true;
     playerState.isPaused = false;
+    playerState.finished = false;
     sendUpdate();
     speakCurrentSentence();
 }
@@ -372,8 +373,9 @@ function speakCurrentSentence() {
                     speakCurrentSentence();
                 }
             } else {
-                // Finished: save index 0 so the popup doesn't offer to resume past the end
+                // Finished: save index 0 so the popup doesn't resume past the end
                 playerState.currentIndex = 0;
+                playerState.finished = true;
                 stop();
             }
         }
@@ -406,6 +408,7 @@ function sendUpdate(sendResponse = null, extra = {}) {
     const state = {
         isPlaying: playerState.isPlaying,
         isPaused: playerState.isPaused,
+        finished: playerState.finished,
         currentIndex: playerState.currentIndex,
         totalSentences: playerState.sentences.length,
         lineBreaks: playerState.lineBreaks,

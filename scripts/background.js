@@ -65,6 +65,8 @@ async function sendPlayerCommand(msg) {
 }
 
 async function startReading({ text, index = 0, tabId = null, tabUrl = null, autoPlay = false }) {
+    const { session: prev } = await chrome.storage.session.get('session');
+    if (prev?.tabId && prev.tabId !== tabId) chrome.tabs.sendMessage(prev.tabId, { type: 'TOGGLE_MINI_PLAYER', visible: false }).catch(() => {});
     // Kept so a fresh player can pick up where this one left off
     await chrome.storage.session.set({ session: { text, tabId, tabUrl }, sessionIndex: index }).catch(() => {});
     return sendPlayerCommand({ type: 'INIT', text, index, tabId, tabUrl, autoPlay, settings: await chrome.storage.sync.get(PLAYER_SETTINGS) });
@@ -137,14 +139,51 @@ async function extractText(tab) {
 }
 
 // Context menu / keyboard shortcut: read a tab from the start without the popup
-async function readTab(tab) {
+async function readTab(tab, index = 0) {
     const { text } = await extractText(tab);
     if (!text) return;
-    await startReading({ text, tabId: tab.id, tabUrl: tab.url, autoPlay: true });
+    await startReading({ text, index, tabId: tab.id, tabUrl: tab.url, autoPlay: true });
     const { miniPlayer } = await chrome.storage.sync.get('miniPlayer');
     if (miniPlayer !== false) {
         chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_MINI_PLAYER', visible: true }).catch(() => {});
     }
+}
+
+// --- Keep reading across pages ---
+
+// The tab being read is navigating away. Carry on with the next page if it was playing or had
+// finished; whether this site allows it is checked once the new page has loaded.
+// In memory: checked and cleared synchronously, so the two paths below can't both continue.
+// The background stays alive for the few seconds a page load takes.
+let continueTabId = null;
+
+async function onPageLeft(tabId) {
+    const { session } = await chrome.storage.session.get('session');
+    if (!tabId || session?.tabId !== tabId) return;
+    const { state } = (await hasPlayer() && await toPlayer({ type: 'GET_STATE' })) || {};
+    if (!((state?.isPlaying && !state.isPaused) || state?.finished)) return stopIfReading(tabId);
+    continueTabId = tabId;
+    toPlayer({ type: 'STOP' }).catch(() => {}); // saves the old page's position
+    // A fast page may have finished loading before we got here
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (tab?.status === 'complete') continueReading(tab);
+}
+
+chrome.tabs.onUpdated.addListener((tabId, { status }, tab) => {
+    if (status === 'complete') continueReading(tab);
+});
+
+async function continueReading(tab) {
+    if (tab.id !== continueTabId) return;
+    continueTabId = null;
+    // Only with the per-site permission from the popup (tab.url is hidden without access).
+    // Pattern without the port, as in ui/utils.js sitePattern(): Firefox never matches ported ones.
+    if (!/^https?:/.test(tab.url || '')) return stopIfReading(tab.id);
+    const { protocol, hostname } = new URL(tab.url);
+    if (!(await chrome.permissions.contains({ origins: [`${protocol}//${hostname}/*`] }))) return stopIfReading(tab.id);
+    const key = 'pos_' + tab.url;
+    const index = (await chrome.storage.local.get(key))[key]?.index || 0;
+    await readTab(tab, index).catch(() => stopIfReading(tab.id));
 }
 
 // --- Saved positions ---
@@ -181,7 +220,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             if (msg.state) onPlayerUpdate(msg.state);
             return;
         case 'PAGE_LEFT':
-            stopIfReading(sender.tab?.id);
+            onPageLeft(sender.tab?.id);
             return;
         case 'SAVE_POSITION':
             reply = chrome.storage.local.set({ ['pos_' + msg.url]: { url: msg.url, index: msg.index, timestamp: Date.now() } });

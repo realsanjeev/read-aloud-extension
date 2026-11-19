@@ -1,5 +1,5 @@
 // pdf-viewer.js - PDF Viewer with integrated TTS controls
-import { getSavedPosition } from './utils.js';
+import { getSavedPosition, sitePattern } from './utils.js';
 import * as shared from './ui-shared.js';
 import * as pdfjsLib from '../lib/pdf.min.mjs';
 
@@ -74,7 +74,7 @@ async function startReading(text, positionKey) {
   const index = saved && saved.index > 0 ? saved.index : 0;
   // This tab's id lets the background stop playback when the viewer is closed
   const tabId = (await chrome.tabs.getCurrent())?.id;
-  shared.sendCommand('INIT', { text, index, tabId, tabUrl: positionKey });
+  shared.sendCommand('INIT', { text, index, tabId, tabUrl: positionKey, autoPlay: true });
   updatePlayButtonState();
 }
 
@@ -99,7 +99,7 @@ async function loadPdfFromSource(sourceUrl) {
 
     let pdfData = sourceUrl;
     if (!sourceUrl.startsWith('file://')) {
-      const origins = [new URL(sourceUrl).origin + '/*'];
+      const origins = [sitePattern(sourceUrl)];
       if (!(await chrome.permissions.contains({ origins }))) {
         // permissions.request() only works inside a user gesture, so ask via a button.
         await new Promise((resolve, reject) => {

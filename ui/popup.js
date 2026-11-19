@@ -1,5 +1,5 @@
 // popup.js - UI Controller for Speak Aloud Extension
-import { getSavedPosition } from './utils.js';
+import { getSavedPosition, sitePattern } from './utils.js';
 import * as shared from './ui-shared.js';
 
 // --- DOM Elements ---
@@ -12,10 +12,10 @@ const elements = {
   btnNextPara: document.getElementById('btnNextPara'),
   btnSettings: document.getElementById('btnSettings'),
   btnTheme: document.getElementById('btnTheme'),
-  btnResumeYes: document.getElementById('btnResumeYes'),
-  btnResumeNo: document.getElementById('btnResumeNo'),
-  otherTabPrompt: document.getElementById('otherTabPrompt'),
-  btnReadThisPage: document.getElementById('btnReadThisPage'),
+  btnStartOver: document.getElementById('btnStartOver'),
+  keepReadingItem: document.getElementById('keepReadingItem'),
+  chkKeepReading: document.getElementById('chkKeepReading'),
+  keepReadingSite: document.getElementById('keepReadingSite'),
   textContent: document.getElementById('textArea'),
   progressBar: document.getElementById('progressBar'),
   iconPlay: document.getElementById('iconPlay'),
@@ -185,33 +185,35 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  setupKeepReading(currentTab);
   const state = (await chrome.runtime.sendMessage({ type: 'GET_STATE' }).catch(() => null))?.state;
-  const hasState = state?.sentences?.length > 0;
-  const isDifferentPage = hasState && (
-    (state.tabId && state.tabId !== currentTab.id) ||
-    (state.tabUrl && state.tabUrl !== currentTab.url)
-  );
+  // The PDF viewer tab's URL differs from the PDF's, so for extension pages the tab id decides
+  const isLoadedHere = state?.sentences?.length > 0 && state.tabId === currentTab.id &&
+    (state.tabUrl === currentTab.url || !/^(https?|file):/.test(currentTab.url || ''));
 
-  if (hasState && !isDifferentPage) {
-    showState(state);
+  if (isLoadedHere) {
+    handleUpdateUI(state);
+    contentReady = true;
+    updatePlayButtonState();
     if (uiState.settings.miniPlayer) updateMiniPlayer(true);
-  } else if (isDifferentPage && (state.isPlaying || state.isPaused)) {
-    // Another tab is being read: keep its controls; switching is the user's call
-    showState(state);
-    elements.otherTabPrompt.classList.remove('hidden');
-    elements.btnReadThisPage.onclick = () => {
-      elements.otherTabPrompt.classList.add('hidden');
-      loadPage(currentTab, hadSavedVoice);
-    };
   } else {
+    // Clicking the icon on a new page means "read this page", even if another tab is playing
     loadPage(currentTab, hadSavedVoice);
   }
 });
 
-function showState(state) {
-  handleUpdateUI(state);
-  contentReady = true;
-  updatePlayButtonState();
+// Per-site permission lets the background keep reading after this tab navigates.
+// Firefox may close the popup while asking; the grant still applies.
+async function setupKeepReading(tab) {
+  if (!/^https?:/.test(tab?.url || '')) return;
+  const origins = [sitePattern(tab.url)];
+  elements.keepReadingSite.textContent = new URL(tab.url).hostname;
+  elements.chkKeepReading.checked = await chrome.permissions.contains({ origins });
+  elements.keepReadingItem.classList.remove('hidden');
+  elements.chkKeepReading.onchange = async (e) => {
+    if (e.target.checked) e.target.checked = await chrome.permissions.request({ origins });
+    else await chrome.permissions.remove({ origins });
+  };
 }
 
 async function loadPage(tab, hadSavedVoice) {
@@ -242,12 +244,9 @@ async function loadPage(tab, hadSavedVoice) {
   contentReady = true;
   updatePlayButtonState();
   if (!hadSavedVoice) await autoSelectVoice(text);
-  const saved = await getSavedPosition(tab.url);
-  if (saved && saved.index > 0) {
-    showResumePrompt(saved.index, text, tab.id, tab.url);
-  } else {
-    await shared.sendCommand('INIT', { text, index: 0, tabId: tab.id, tabUrl: tab.url });
-  }
+  const index = (await getSavedPosition(tab.url))?.index || 0;
+  await shared.sendCommand('INIT', { text, index, tabId: tab.id, tabUrl: tab.url, autoPlay: true });
+  if (index > 0) showResumedNotice();
   if (uiState.settings.miniPlayer) updateMiniPlayer(true);
 }
 
@@ -284,18 +283,13 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 // --- Resume Position ---
 
-function showResumePrompt(savedIndex, text, tabId, tabUrl) {
+function showResumedNotice() {
+  const hide = () => elements.resumePrompt.classList.add('hidden');
+  const timer = setTimeout(hide, 8000);
   elements.resumePrompt.classList.remove('hidden');
-
-  const dismiss = (index) => {
-    clearTimeout(autoDismiss);
-    elements.resumePrompt.classList.add('hidden');
-    shared.sendCommand('INIT', { text, index, tabId, tabUrl });
+  elements.btnStartOver.onclick = () => {
+    clearTimeout(timer);
+    hide();
+    shared.sendCommand('JUMP', { index: 0 });
   };
-
-  // Auto-dismiss after 8 s — defaults to starting fresh
-  const autoDismiss = setTimeout(() => dismiss(0), 8000);
-
-  elements.btnResumeYes.onclick = () => dismiss(savedIndex);
-  elements.btnResumeNo.onclick = () => dismiss(0);
 }
