@@ -16,6 +16,12 @@ export function debounce(fn, delay) {
     };
 }
 
+// No port: Firefox never matches ported patterns; without one, every port is covered.
+export function sitePattern(url) {
+    const { protocol, hostname } = new URL(url);
+    return `${protocol}//${hostname}/*`;
+}
+
 /**
  * Retrieves a saved playback position from chrome.storage.local for the given URL.
  * @param {string} url

@@ -1,4 +1,8 @@
-// offscreen.js - Text-to-Speech Engine
+// offscreen.js - Text-to-Speech engine.
+// Chrome: runs in an offscreen document, where chrome.runtime is the only extension API
+// (no chrome.storage), so persistence goes through the background via messages.
+// Firefox: runs in a hidden iframe inside the background page (no offscreen API).
+// Both receive commands from the background as runtime messages flagged _forwarded.
 
 let playerState = {
     sentences: [],
@@ -6,8 +10,9 @@ let playerState = {
     currentIndex: 0,
     isPlaying: false,
     isPaused: false,
+    finished: false, // reached the end; the background continues on the next page
     tabId: null,
-    tabUrl: null,  // stored at INIT so savePosition() doesn't need chrome.tabs (unavailable in offscreen)
+    tabUrl: null,  // stored at INIT so savePosition() doesn't need chrome.tabs
     settings: {
         voiceName: null,
         rate: 1.0,
@@ -19,12 +24,9 @@ let playerState = {
 };
 
 let errorRetryCount = 0;
-let voiceRetryCount = 0;
-const MAX_VOICE_RETRIES = 20;
-let isSpeaking = false;
+let speakTimer = null; // pending deferred speak (Firefox gaps, error retries); cleared by cancelSpeech()
 
-// Firefox detection: in Firefox the offscreen page runs as an iframe inside
-// the background page (window.parent !== window). On Chrome it's standalone.
+// In Firefox this page is an iframe inside the background page; on Chrome it's standalone.
 const isFirefox = (window.parent !== window);
 
 // Firefox-specific timing constants (ms)
@@ -32,11 +34,30 @@ const FIREFOX_POST_CANCEL_DELAY = 50;     // delay after cancel() before speak()
 const FIREFOX_INTER_UTTERANCE_DELAY = 80;  // gap between consecutive sentences
 const FIREFOX_ERROR_RETRY_DELAY = 350;     // retry delay after TTS error
 
+// getVoices() is empty until the engine has loaded; wait once for voiceschanged
+// (capped, since some engines never fire it) so the selected voice is applied.
+let voicesLoaded = false;
+const voicesReady = new Promise((resolve) => {
+    if (window.speechSynthesis.getVoices().length > 0) return resolve();
+    window.speechSynthesis.addEventListener('voiceschanged', resolve, { once: true });
+    setTimeout(resolve, 3000);
+}).then(() => { voicesLoaded = true; });
+
+function findVoice(name) {
+    return window.speechSynthesis.getVoices().find(v => v.name === name);
+}
+
+function speakLater(delay) {
+    clearTimeout(speakTimer);
+    speakTimer = setTimeout(speakCurrentSentence, delay);
+}
+
 /**
- * Safely cancels any active SpeechSynthesis utterance and resets lock variables.
+ * Safely cancels any active SpeechSynthesis utterance and any pending deferred speak.
  * Clears callbacks to prevent recursive event firing during cancellation.
  */
 function cancelSpeech() {
+    clearTimeout(speakTimer);
     if (playerState.utterance) {
         playerState.utterance.onstart = null;
         playerState.utterance.onend = null;
@@ -44,16 +65,13 @@ function cancelSpeech() {
         playerState.utterance.onboundary = null;
     }
     window.speechSynthesis.cancel();
-    isSpeaking = false;
 }
 
-// Settings are initialized via INIT and UPDATE_SETTINGS messages from the popup
+// Settings arrive with INIT and UPDATE_SETTINGS messages from the background
 
 function handleMessage(msg, sender, sendResponse) {
     // Ignore direct broadcasts from the popup; only accept commands proxied by the background service worker
-    if (msg.type && (msg.type === 'PAUSE' || msg.type === 'STOP' || msg.type === 'TOGGLE_PLAY' || msg.type === 'NEXT' || msg.type === 'PREV' || msg.type === 'NEXT_PARA' || msg.type === 'PREV_PARA' || msg.type === 'JUMP' || msg.type === 'INIT' || msg.type === 'UPDATE_SETTINGS' || msg.type === 'TEST' || msg.type === 'GET_STATE' || msg.type === 'STOP_IF_TAB') && !msg._forwarded) {
-        return;
-    }
+    if (!msg._forwarded) return;
 
     switch (msg.type) {
 
@@ -106,19 +124,15 @@ function handleMessage(msg, sender, sendResponse) {
             testVoice(msg);
             sendResponse({ status: 'ok' });
             break;
-        case 'STOP_IF_TAB':
-            if (playerState.tabId && playerState.tabId === msg.tabId) {
-                stop().then(() => {
-                    playerState.tabId = null;
-                    playerState.tabUrl = null;
-                    playerState.sentences = [];
-                    sendUpdate(null, { fullPayload: true });
-                    sendResponse({ status: 'ok' });
-                });
-                return true;
-            }
-            sendResponse({ status: 'ignored' });
-            break;
+        case 'UNLOAD': // the tab being read closed or navigated away
+            stop().then(() => {
+                playerState.tabId = null;
+                playerState.tabUrl = null;
+                playerState.sentences = [];
+                sendUpdate(null, { fullPayload: true });
+                sendResponse({ status: 'ok' });
+            });
+            return true;
         case 'GET_STATE':
             sendUpdate(sendResponse);
             return true;
@@ -127,69 +141,43 @@ function handleMessage(msg, sender, sendResponse) {
 
 chrome.runtime.onMessage.addListener(handleMessage);
 
-// Firefox compatibility: listen to window messages from the parent background script
-window.addEventListener('message', (event) => {
-    const msg = event.data;
-    if (msg && msg.type) {
-        const sendResponse = (response) => {
-            if (msg._messageId) {
-                window.parent.postMessage({
-                    responseTo: msg._messageId,
-                    response: response
-                }, '*');
-            }
-        };
-        handleMessage(msg, {}, sendResponse);
+
+const segmenter = new Intl.Segmenter(undefined, { granularity: 'sentence' });
+
+// Online voices (notably Google's in Chrome) cut off around 15s and never fire onend,
+// which stalls playback, so long sentences are split at a clause boundary or space.
+const MAX_CHUNK = 200;
+function splitLong(s) {
+    const out = [];
+    while (s.length > MAX_CHUNK) {
+        const head = s.slice(0, MAX_CHUNK);
+        let cut = Math.max(head.lastIndexOf(', '), head.lastIndexOf('; '), head.lastIndexOf(': ')) + 1;
+        if (cut < MAX_CHUNK / 2) cut = head.lastIndexOf(' ');
+        if (cut <= 0) cut = MAX_CHUNK;
+        out.push(s.slice(0, cut).trim());
+        s = s.slice(cut).trim();
     }
-});
+    if (s) out.push(s);
+    return out;
+}
 
 /**
- * Smart sentence tokenizer that handles abbreviations, decimals, and ellipsis.
+ * Splits text into speakable sentences; lineBreaks holds the sentence index starting each paragraph.
  */
 function tokenizeSentences(text) {
-    if (!text || text.length === 0) return { sentences: [], lineBreaks: [] };
-
-    let segmenter = null;
-    try {
-        if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-            segmenter = new Intl.Segmenter(undefined, { granularity: 'sentence' });
-        }
-    } catch (e) {
-        console.warn("Intl.Segmenter not supported or failed to initialize, using regex fallback:", e);
-    }
-
     const sentences = [];
     const lineBreaks = [];
-    const lines = text.split(/\n+/);
+    if (!text) return { sentences, lineBreaks };
 
-    lines.forEach(line => {
+    for (const line of text.split(/\n+/)) {
         const trimmedLine = line.trim();
-        if (trimmedLine.length === 0) return;
-
-        if (sentences.length > 0) {
-            lineBreaks.push(sentences.length);
+        if (!trimmedLine) continue;
+        if (sentences.length > 0) lineBreaks.push(sentences.length);
+        for (const { segment } of segmenter.segment(trimmedLine)) {
+            const s = segment.trim();
+            if (s) sentences.push(...splitLong(s));
         }
-
-        if (segmenter) {
-            for (const segment of segmenter.segment(trimmedLine)) {
-                const s = segment.segment.trim();
-                if (s.length > 0) {
-                    sentences.push(s);
-                }
-            }
-        } else {
-            // Regex fallback for older browsers (Firefox < 125)
-            // Splitting by typical sentence boundaries (. ! ?) followed by whitespace
-            const segments = trimmedLine.split(/(?<=[.!?])\s+/);
-            segments.forEach(segment => {
-                const s = segment.trim();
-                if (s.length > 0) {
-                    sentences.push(s);
-                }
-            });
-        }
-    });
-
+    }
     return { sentences, lineBreaks };
 }
 
@@ -199,21 +187,16 @@ function tokenizeSentences(text) {
 function initPlayer(text, startIndex, settings = null, autoPlay = false, tabId = null, tabUrl = null) {
     cancelSpeech();
 
-    if (tabId !== null) {
+    if (text) {
         playerState.tabId = tabId;
-    }
-    if (tabUrl !== null) {
         playerState.tabUrl = tabUrl;
+        const tokenized = tokenizeSentences(text);
+        playerState.sentences = tokenized.sentences;
+        playerState.lineBreaks = tokenized.lineBreaks;
     }
 
     if (settings) {
         playerState.settings = { ...playerState.settings, ...settings };
-    }
-
-    if (text) {
-        const tokenized = tokenizeSentences(text);
-        playerState.sentences = tokenized.sentences;
-        playerState.lineBreaks = tokenized.lineBreaks;
     }
 
     playerState.currentIndex = Math.min(startIndex, playerState.sentences.length - 1);
@@ -221,12 +204,11 @@ function initPlayer(text, startIndex, settings = null, autoPlay = false, tabId =
     
     playerState.isPlaying = autoPlay;
     playerState.isPaused = false;
+    playerState.finished = false;
 
-    if (autoPlay) {
-        speakCurrentSentence();
-    } else {
-        sendUpdate(null, { fullPayload: true });
-    }
+    // New text must reach the popup / PDF viewer even when playback starts right away
+    sendUpdate(null, { fullPayload: !!text });
+    if (autoPlay) speakCurrentSentence();
 }
 
 function updateSettings(newSettings) {
@@ -246,9 +228,9 @@ function play() {
     
     playerState.isPlaying = true;
     playerState.isPaused = false;
+    playerState.finished = false;
     sendUpdate();
     speakCurrentSentence();
-    startAutoPersist();
 }
 
 function pause() {
@@ -276,13 +258,13 @@ function togglePause() {
 }
 
 async function stop() {
-    await savePosition();
-    clearInterval(autoPersistIntervalId);
+    const posPromise = savePosition();
     playerState.isPlaying = false;
     playerState.isPaused = false;
     playerState.currentIndex = 0;
     cancelSpeech();
     sendUpdate();
+    await posPromise;
 }
 
 function next() {
@@ -337,16 +319,16 @@ function prevParagraph() {
 }
 
 function speakCurrentSentence() {
-    if (isSpeaking) return;
     cancelSpeech();
-    isSpeaking = true;
-    
-    if (playerState.sentences.length === 0 || playerState.currentIndex >= playerState.sentences.length) {
+    if (!playerState.isPlaying) return;
+
+    if (playerState.currentIndex >= playerState.sentences.length) {
         playerState.isPlaying = false;
-        isSpeaking = false;
         sendUpdate();
         return;
     }
+
+    if (!voicesLoaded) return voicesReady.then(speakCurrentSentence);
 
     const text = playerState.sentences[playerState.currentIndex];
     const utter = new SpeechSynthesisUtterance(text);
@@ -356,37 +338,8 @@ function speakCurrentSentence() {
     utter.pitch = playerState.settings.pitch;
     utter.volume = playerState.settings.volume;
 
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length === 0) {
-        if (voiceRetryCount >= MAX_VOICE_RETRIES) {
-            isSpeaking = false;
-            console.error("Offscreen: Max voice retries reached, aborting speech.");
-            return;
-        }
-        console.warn("Offscreen: Voices not loaded yet, waiting for voiceschanged...");
-        const onVoicesChanged = () => {
-            window.speechSynthesis.onvoiceschanged = null;
-            voiceRetryCount = 0;
-            isSpeaking = false;
-            speakCurrentSentence();
-        };
-        window.speechSynthesis.onvoiceschanged = onVoicesChanged;
-        setTimeout(() => {
-            if (window.speechSynthesis.onvoiceschanged === onVoicesChanged) {
-                window.speechSynthesis.onvoiceschanged = null;
-                voiceRetryCount++;
-                isSpeaking = false;
-                speakCurrentSentence();
-            }
-        }, 1000);
-        return;
-    }
-    voiceRetryCount = 0;
-
-    if (playerState.settings.voiceName) {
-        const v = voices.find(voice => voice.name === playerState.settings.voiceName);
-        if (v) utter.voice = v;
-    }
+    const voice = findVoice(playerState.settings.voiceName);
+    if (voice) utter.voice = voice;
 
     if (playerState.settings.highlightMode === 'word') {
         utter.onboundary = (event) => {
@@ -404,12 +357,10 @@ function speakCurrentSentence() {
 
     utter.onstart = () => {
         errorRetryCount = 0;
-        isSpeaking = false;
         sendUpdate();
     };
 
     utter.onend = () => {
-        isSpeaking = false;
         if (playerState.isPlaying && !playerState.isPaused) {
             playerState.currentIndex++;
             if (playerState.currentIndex < playerState.sentences.length) {
@@ -417,18 +368,20 @@ function speakCurrentSentence() {
                 // Firefox needs a brief gap between utterances to avoid
                 // clipped beginnings, audio pops, and skipped sentences
                 if (isFirefox) {
-                    setTimeout(speakCurrentSentence, FIREFOX_INTER_UTTERANCE_DELAY);
+                    speakLater(FIREFOX_INTER_UTTERANCE_DELAY);
                 } else {
                     speakCurrentSentence();
                 }
             } else {
+                // Finished: save index 0 so the popup doesn't resume past the end
+                playerState.currentIndex = 0;
+                playerState.finished = true;
                 stop();
             }
         }
     };
 
     utter.onerror = (e) => {
-        isSpeaking = false;
         if (e.error !== 'interrupted' && e.error !== 'canceled') {
             console.error("TTS Error:", e.error);
             if (playerState.isPlaying) {
@@ -438,21 +391,15 @@ function speakCurrentSentence() {
                     errorRetryCount = 0;
                 }
                 // Firefox's speech engine needs longer recovery time
-                const retryDelay = isFirefox ? FIREFOX_ERROR_RETRY_DELAY : 100;
-                setTimeout(speakCurrentSentence, retryDelay);
+                speakLater(isFirefox ? FIREFOX_ERROR_RETRY_DELAY : 100);
             }
         }
     };
 
-    // On Firefox, delay speak() after cancel() to prevent overlapping/garbled audio
+    // On Firefox, delay speak() after cancel() to prevent overlapping/garbled audio.
+    // Uses speakTimer so a pause/stop/skip in the gap cancels it.
     if (isFirefox) {
-        setTimeout(() => {
-            if (playerState.isPlaying && !playerState.isPaused) {
-                window.speechSynthesis.speak(utter);
-            } else {
-                isSpeaking = false;
-            }
-        }, FIREFOX_POST_CANCEL_DELAY);
+        speakTimer = setTimeout(() => window.speechSynthesis.speak(utter), FIREFOX_POST_CANCEL_DELAY);
     } else {
         window.speechSynthesis.speak(utter);
     }
@@ -461,6 +408,7 @@ function sendUpdate(sendResponse = null, extra = {}) {
     const state = {
         isPlaying: playerState.isPlaying,
         isPaused: playerState.isPaused,
+        finished: playerState.finished,
         currentIndex: playerState.currentIndex,
         totalSentences: playerState.sentences.length,
         lineBreaks: playerState.lineBreaks,
@@ -482,112 +430,40 @@ function sendUpdate(sendResponse = null, extra = {}) {
     if (sendResponse) {
         sendResponse({ type: 'UPDATE_UI', state });
     } else {
-        chrome.runtime.sendMessage({ type: 'UPDATE_UI', state }, () => {
-            if (chrome.runtime.lastError) {
-                console.debug("Offscreen: UPDATE_UI broadcast had no receivers:", chrome.runtime.lastError.message);
-            }
-        });
+        chrome.runtime.sendMessage({ type: 'UPDATE_UI', state }).catch(() => {});
     }
 }
 
 
+// Persisted by the background: chrome.storage doesn't exist in Chrome offscreen documents.
 function savePosition() {
     if (!playerState.tabUrl || playerState.sentences.length === 0) return Promise.resolve();
-    // Guard against extension context being torn down during auto-persist
-    if (!chrome.storage) return Promise.resolve();
-    const key = 'pos_' + playerState.tabUrl;
-    return new Promise((resolve) => {
-        chrome.storage.local.set({
-            [key]: {
-                url: playerState.tabUrl,
-                index: playerState.currentIndex,
-                timestamp: Date.now()
-            }
-        }, () => {
-            if (chrome.runtime.lastError) {
-                console.warn("Offscreen: savePosition failed:", chrome.runtime.lastError.message);
-            }
-            resolve();
-        });
-    });
+    return chrome.runtime.sendMessage({
+        type: 'SAVE_POSITION',
+        url: playerState.tabUrl,
+        index: playerState.currentIndex
+    }).catch((e) => console.warn("Offscreen: savePosition failed:", e.message));
 }
-
-let testVoiceRetryCount = 0;
-const MAX_TEST_VOICE_RETRIES = 20;
 
 function testVoice(msg = {}) {
-    const wasPlaying = playerState.isPlaying;
-    const wasPaused = playerState.isPaused;
-    const savedIndex = playerState.currentIndex;
-    
+    if (!voicesLoaded) return voicesReady.then(() => testVoice(msg));
+
+    const wasPlaying = playerState.isPlaying && !playerState.isPaused;
     cancelSpeech();
-    
-    const text = "This is a test of your selected voice.";
-    const utter = new SpeechSynthesisUtterance(text);
+
+    const utter = new SpeechSynthesisUtterance("This is a test of your selected voice.");
     playerState.utterance = utter;
+    utter.rate = msg.rate ?? playerState.settings.rate;
+    utter.pitch = msg.pitch ?? playerState.settings.pitch;
+    utter.volume = msg.volume ?? playerState.settings.volume;
 
-    const rate = (msg.rate !== undefined) ? msg.rate : playerState.settings.rate;
-    const pitch = (msg.pitch !== undefined) ? msg.pitch : playerState.settings.pitch;
-    const volume = (msg.volume !== undefined) ? msg.volume : playerState.settings.volume;
-    const voiceName = msg.voiceName || playerState.settings.voiceName;
+    const voice = findVoice(msg.voiceName || playerState.settings.voiceName);
+    if (voice) utter.voice = voice;
 
-    utter.rate = rate;
-    utter.pitch = pitch;
-    utter.volume = volume;
-
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length === 0) {
-        if (testVoiceRetryCount >= MAX_TEST_VOICE_RETRIES) {
-            testVoiceRetryCount = 0;
-            console.error("Offscreen: Max test voice retries reached.");
-            return;
-        }
-        console.warn("Offscreen: Voices not loaded for test, waiting...");
-        testVoiceRetryCount++;
-        setTimeout(() => testVoice(msg), 100);
-        return;
-    }
-    testVoiceRetryCount = 0;
-
-    if (voiceName) {
-        const v = voices.find(voice => voice.name === voiceName);
-        if (v) utter.voice = v;
-    }
-
-    const restoreState = () => {
-        if (wasPlaying && !wasPaused) {
-            playerState.currentIndex = savedIndex;
-            playerState.isPlaying = true;
-            playerState.isPaused = false;
-            speakCurrentSentence();
-        } else {
-            sendUpdate();
-        }
+    // Any pause/skip/stop during the test calls cancelSpeech(), which detaches these handlers.
+    utter.onend = utter.onerror = () => {
+        if (wasPlaying) speakCurrentSentence();
+        else sendUpdate();
     };
-
-    utter.onend = restoreState;
-    utter.onerror = restoreState;
-    window.speechSynthesis.speak(utter);
+    isFirefox ? (speakTimer = setTimeout(() => speechSynthesis.speak(utter), FIREFOX_POST_CANCEL_DELAY)) : speechSynthesis.speak(utter);
 }
-
-
-
-// Auto-persist position periodically while playing
-let autoPersistIntervalId = null;
-
-function startAutoPersist() {
-    if (autoPersistIntervalId !== null) return;
-    autoPersistIntervalId = setInterval(() => {
-        if (playerState.isPlaying && !playerState.isPaused) {
-            savePosition();
-        }
-    }, 5000);
-}
-
-// Cleanup on page hide/unload
-addEventListener('pagehide', () => {
-    if (autoPersistIntervalId !== null) {
-        clearInterval(autoPersistIntervalId);
-        autoPersistIntervalId = null;
-    }
-});

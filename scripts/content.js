@@ -26,38 +26,23 @@ const SPEEDS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
  * Safely send a message to the extension runtime.
  * Catches "Extension context invalidated" errors that occur after extension reload.
  */
-function safeSendMessage(message, callback) {
+function safeSendMessage(message) {
     try {
-        chrome.runtime.sendMessage(message, (response) => {
-            if (chrome.runtime.lastError) {
-                console.warn("[ReadAloud] Runtime error:", chrome.runtime.lastError.message);
-                return;
-            }
-            if (callback) callback(response);
-        });
+        return chrome.runtime.sendMessage(message).catch((e) => console.warn("[ReadAloud] Runtime error:", e.message));
     } catch (e) {
         console.warn("[ReadAloud] Extension context invalidated. Please reload the page.");
+        return Promise.resolve();
     }
 }
 
-// Listen for messages from the popup / background / offscreen
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (sender.id && sender.id !== chrome.runtime.id) {
-        console.warn("[ReadAloud] Unauthorized message origin:", sender.id);
-        return;
-    }
+// Called by the background via scripting.executeScript after injection
+window.__readAloudExtract = extractContentFromPage;
 
-    if (msg.type === 'EXTRACT_CONTENT') {
-        try {
-            const content = extractContentFromPage();
-            sendResponse({ result: content });
-        } catch (err) {
-            console.error("[ReadAloud] Extraction failed:", err);
-            sendResponse({ error: err.message });
-        }
-        return true;
-    }
+// Reading this tab stops when it navigates away or reloads
+window.addEventListener('pagehide', () => safeSendMessage({ type: 'PAGE_LEFT' }));
 
+// Listen for messages from the popup / background
+chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'UPDATE_UI') {
         const state = msg.state;
         if (state) {
@@ -75,11 +60,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             playerEnabled = false;
             hideMiniPlayer();
         }
-        safeSendMessage({ type: 'GET_STATE' }, (response) => {
-            if (response && response.state) {
-                updateMiniPlayer(response.state);
-            }
-        });
+        safeSendMessage({ type: 'GET_STATE' }).then((r) => r?.state && updateMiniPlayer(r.state));
         return;
     }
 });
@@ -88,6 +69,22 @@ function extractContentFromPage() {
     // 1. Check for user selection first (highest priority)
     const selection = window.getSelection().toString().trim();
     if (selection.length > 0) return selection;
+
+    // Plain text / markdown files render as text; no article to find
+    if (/^text\/(plain|markdown|x-markdown)/.test(document.contentType)) {
+        const text = document.body.innerText.trim();
+        if (!/\.md$/i.test(location.pathname) && !/markdown/.test(document.contentType)) return text;
+        return text
+            .replace(/#+\s+/g, '')
+            .replace(/\*\*|__/g, '')
+            .replace(/\*|_/g, '')
+            .replace(/`{1,3}[^`]*`{1,3}/g, '')
+            .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+            .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+            .replace(/>\s+/g, '')
+            .replace(/-{3,}/g, '')
+            .trim();
+    }
 
     // 2. Use Readability.js if available
     if (typeof Readability !== 'undefined') {
@@ -233,6 +230,7 @@ function ensureMiniPlayer() {
             line-height: 1.4;
             box-sizing: border-box;
             z-index: 2147483647;
+            touch-action: none;
         }
         .read-aloud-mini-player * {
             box-sizing: border-box;
@@ -387,104 +385,42 @@ function ensureMiniPlayer() {
     miniPlayer = container;
 
     // --- Dragging Logic ---
-    let isDragging = false;
-    let dragStartX = 0;
-    let dragStartY = 0;
-    let initialLeft = 0;
-    let initialTop = 0;
-
     // Restore position if saved
-    chrome.storage.local.get(['miniPlayerPos'], (result) => {
-        if (result.miniPlayerPos) {
-            const { left, top } = result.miniPlayerPos;
+    chrome.storage.local.get('miniPlayerPos').then(({ miniPlayerPos }) => {
+        if (miniPlayerPos) {
             container.style.bottom = 'auto';
             container.style.right = 'auto';
-            container.style.left = left;
-            container.style.top = top;
+            container.style.left = miniPlayerPos.left;
+            container.style.top = miniPlayerPos.top;
         }
     });
 
-    const startDrag = (e) => {
-        // Prevent dragging if clicking a button or progress bar
-        if (e.target.closest && (e.target.closest('button') || e.target.closest('.mini-progress-container'))) {
-            return;
-        }
-        
-        const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
-        const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
-        
-        isDragging = true;
-        dragStartX = clientX;
-        dragStartY = clientY;
-        
+    // Pointer capture keeps move events on the player, so no page-wide listeners are needed
+    container.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('button, .mini-progress-container')) return;
         const rect = container.getBoundingClientRect();
-        initialLeft = rect.left;
-        initialTop = rect.top;
-        
-        // Remove bottom/right constraints so left/top take over seamlessly
+        const offsetX = e.clientX - rect.left;
+        const offsetY = e.clientY - rect.top;
+        const move = (ev) => {
+            container.style.left = `${Math.max(0, Math.min(ev.clientX - offsetX, window.innerWidth - rect.width))}px`;
+            container.style.top = `${Math.max(0, Math.min(ev.clientY - offsetY, window.innerHeight - rect.height))}px`;
+        };
         container.style.bottom = 'auto';
         container.style.right = 'auto';
-        container.style.left = `${initialLeft}px`;
-        container.style.top = `${initialTop}px`;
-        container.style.transition = 'none'; // Disable transition for instant drag
-    };
-
-    const doDrag = (e) => {
-        if (!isDragging) return;
-        if (e.type === 'touchmove') {
-            e.preventDefault(); // Prevent scrolling while dragging
-        }
-        
-        const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
-        const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
-        
-        const deltaX = clientX - dragStartX;
-        const deltaY = clientY - dragStartY;
-        
-        let newLeft = initialLeft + deltaX;
-        let newTop = initialTop + deltaY;
-        
-        // Keep inside viewport bounds
-        const rect = container.getBoundingClientRect();
-        const maxLeft = window.innerWidth - rect.width;
-        const maxTop = window.innerHeight - rect.height;
-        
-        newLeft = Math.max(0, Math.min(newLeft, maxLeft));
-        newTop = Math.max(0, Math.min(newTop, maxTop));
-        
-        container.style.left = `${newLeft}px`;
-        container.style.top = `${newTop}px`;
-    };
-
-    const stopDrag = () => {
-        if (!isDragging) return;
-        isDragging = false;
-        container.style.transition = ''; // Restore transition
-        
-        // Save new position
-        chrome.storage.local.set({
-            miniPlayerPos: {
-                left: container.style.left,
-                top: container.style.top
-            }
-        });
-    };
-
-    container.addEventListener('mousedown', startDrag);
-    window.addEventListener('mousemove', doDrag);
-    window.addEventListener('mouseup', stopDrag);
-
-    container.addEventListener('touchstart', startDrag, { passive: false });
-    window.addEventListener('touchmove', doDrag, { passive: false });
-    window.addEventListener('touchend', stopDrag);
+        container.style.transition = 'none'; // instant drag
+        move(e);
+        container.setPointerCapture(e.pointerId);
+        container.addEventListener('pointermove', move);
+        container.addEventListener('lostpointercapture', () => {
+            container.removeEventListener('pointermove', move);
+            container.style.transition = '';
+            chrome.storage.local.set({ miniPlayerPos: { left: container.style.left, top: container.style.top } });
+        }, { once: true });
+    });
     // --- End Dragging Logic ---
 
     // Request current state
-    safeSendMessage({ type: 'GET_STATE' }, (response) => {
-        if (response && response.state) {
-            updateMiniPlayer(response.state);
-        }
-    });
+    safeSendMessage({ type: 'GET_STATE' }).then((r) => r?.state && updateMiniPlayer(r.state));
 
     // Event listeners inside Shadow Root
     container.querySelector('.mini-toggle').addEventListener('click', (e) => {
@@ -515,7 +451,7 @@ function ensureMiniPlayer() {
         if (newRate !== currentSettings.rate) {
             currentSettings.rate = newRate;
             updateSpeedDisplay();
-            safeSendMessage({ type: 'UPDATE_SETTINGS', settings: { rate: newRate } });
+            chrome.storage.sync.set({ rate: newRate });
         }
     });
     container.querySelector('.mini-speed-up').addEventListener('click', (e) => {
@@ -524,7 +460,7 @@ function ensureMiniPlayer() {
         if (newRate !== currentSettings.rate) {
             currentSettings.rate = newRate;
             updateSpeedDisplay();
-            safeSendMessage({ type: 'UPDATE_SETTINGS', settings: { rate: newRate } });
+            chrome.storage.sync.set({ rate: newRate });
         }
     });
 }

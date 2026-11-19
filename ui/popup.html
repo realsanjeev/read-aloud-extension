@@ -48,12 +48,11 @@
       </div>
     </header>
 
-    <!-- Resume Prompt -->
+    <!-- Shown briefly when reading resumes from a saved position -->
     <div id="resumePrompt" class="resume-prompt hidden">
-      <span>Resume from where you left off?</span>
+      <span>Resumed where you left off.</span>
       <div class="resume-actions">
-        <button id="btnResumeYes" class="text-btn">Resume</button>
-        <button id="btnResumeNo" class="text-btn secondary">Start Over</button>
+        <button id="btnStartOver" class="text-btn secondary">Start Over</button>
       </div>
     </div>
 
@@ -130,6 +129,13 @@
       <div class="setting-item">
         <label>Volume: <span id="volumeValue">1.0</span></label>
         <input type="range" id="volumeRange" min="0" max="1.0" step="0.1" value="1.0">
+      </div>
+
+      <div id="keepReadingItem" class="setting-item checkbox-item hidden">
+        <label class="checkbox-label">
+          <input type="checkbox" id="chkKeepReading">
+          <span>Keep reading the next page on <strong id="keepReadingSite"></strong></span>
+        </label>
       </div>
 
       <div class="setting-item checkbox-item">

@@ -1,8 +1,9 @@
 // pdf-viewer.js - PDF Viewer with integrated TTS controls
-import { getSavedPosition } from './utils.js';
+import { getSavedPosition, sitePattern } from './utils.js';
 import * as shared from './ui-shared.js';
+import * as pdfjsLib from '../lib/pdf.min.mjs';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
+pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.mjs');
 
 // --- DOM Elements ---
 const elements = {
@@ -40,10 +41,7 @@ const elements = {
 
 // --- Global State ---
 let uiState = shared.createBaseState();
-let voices = [];
 let contentReady = false;
-let voiceRetryRef = { count: 0 };
-let pdfUrl = null;
 
 // --- Helpers ---
 
@@ -62,35 +60,30 @@ function showTextArea() {
   elements.dropZone.classList.add('hidden');
 }
 
+/**
+ * Hands extracted text to the player, resuming from a saved position if any.
+ * `positionKey` identifies the document for resume (URL or file_upload://name).
+ */
+async function startReading(text, positionKey) {
+  if (!text) {
+    elements.textContent.innerHTML = '<p class="placeholder-text">No text found in PDF.</p>';
+    return;
+  }
+  contentReady = true;
+  const saved = await getSavedPosition(positionKey);
+  const index = saved && saved.index > 0 ? saved.index : 0;
+  // This tab's id lets the background stop playback when the viewer is closed
+  const tabId = (await chrome.tabs.getCurrent())?.id;
+  shared.sendCommand('INIT', { text, index, tabId, tabUrl: positionKey, autoPlay: true });
+  updatePlayButtonState();
+}
+
 async function handleLocalFile(file) {
   try {
     elements.textContent.innerHTML = '<p class="placeholder-text">Reading PDF file and extracting text...</p>';
     showTextArea();
-    
-    const reader = new FileReader();
-    const arrayBuffer = await new Promise((resolve, reject) => {
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = () => reject(reader.error);
-      reader.readAsArrayBuffer(file);
-    });
-    
-    const uint8Array = new Uint8Array(arrayBuffer);
-    const text = await extractPdfText(uint8Array);
-    
-    if (text) {
-      contentReady = true;
-      pdfUrl = `file_upload://${file.name}`;
-      const saved = await getSavedPosition(pdfUrl);
-      const index = saved && saved.index > 0 ? saved.index : 0;
-      if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
-        uiState.settings.voiceName = elements.voiceSelect.value;
-        shared.saveSettings(uiState);
-      }
-      shared.sendCommand('INIT', { text, index, settings: uiState.settings, tabUrl: pdfUrl });
-      updatePlayButtonState();
-    } else {
-      elements.textContent.innerHTML = '<p class="placeholder-text">No text found in PDF.</p>';
-    }
+    const text = await extractPdfText(new Uint8Array(await file.arrayBuffer()));
+    await startReading(text, `file_upload://${file.name}`);
   } catch (err) {
     console.error("Local PDF extraction failed:", err);
     elements.textContent.innerHTML = '<p class="error">Error extracting PDF: <span class="error-msg"></span></p>';
@@ -104,27 +97,31 @@ async function loadPdfFromSource(sourceUrl) {
     elements.textContent.innerHTML = '<p class="placeholder-text">Loading PDF and extracting text...</p>';
     showTextArea();
 
-    let pdfData;
-    if (sourceUrl.startsWith('file://')) {
-      pdfData = sourceUrl;
-    } else {
-      pdfData = await fetchPdfViaBackground(sourceUrl);
-    }
-
-    const text = await extractPdfText(pdfData);
-    if (text) {
-      contentReady = true;
-      const saved = await getSavedPosition(sourceUrl);
-      const index = saved && saved.index > 0 ? saved.index : 0;
-      if (!uiState.settings.voiceName && elements.voiceSelect && elements.voiceSelect.value) {
-        uiState.settings.voiceName = elements.voiceSelect.value;
-        shared.saveSettings(uiState);
+    let pdfData = sourceUrl;
+    if (!sourceUrl.startsWith('file://')) {
+      const origins = [sitePattern(sourceUrl)];
+      if (!(await chrome.permissions.contains({ origins }))) {
+        // permissions.request() only works inside a user gesture, so ask via a button.
+        await new Promise((resolve, reject) => {
+          elements.textContent.innerHTML = `
+            <div style="padding: 20px; text-align: center;">
+              <p class="placeholder-text">Allow access to this site so the PDF can be downloaded.</p>
+              <button id="btnGrantAccess" class="retry-btn">Allow access</button>
+            </div>`;
+          document.getElementById('btnGrantAccess').onclick = () => {
+            chrome.permissions.request({ origins }).then((granted) => {
+              if (!granted) return reject(new Error('Host permission denied. Please allow access to this site to load the PDF.'));
+              elements.textContent.innerHTML = '<p class="placeholder-text">Loading PDF and extracting text...</p>';
+              resolve();
+            }, reject);
+          };
+        });
       }
-      shared.sendCommand('INIT', { text, index, settings: uiState.settings, tabUrl: sourceUrl });
-      updatePlayButtonState();
-    } else {
-      elements.textContent.innerHTML = '<p class="placeholder-text">No text found in PDF.</p>';
+      const response = await fetch(sourceUrl);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      pdfData = new Uint8Array(await response.arrayBuffer());
     }
+    await startReading(await extractPdfText(pdfData), sourceUrl);
   } catch (err) {
     console.error("PDF load failed:", err);
     elements.textContent.innerHTML = `
@@ -137,31 +134,9 @@ async function loadPdfFromSource(sourceUrl) {
     if (errorDetailEl) {
       errorDetailEl.textContent = err.message || "An unknown error occurred while trying to parse the PDF.";
     }
-    showDropZone();
+    // Keep the error visible and offer the drop zone below it
+    elements.dropZone.classList.remove('hidden');
   }
-}
-
-function fetchPdfViaBackground(url) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type: 'FETCH_PDF', url }, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      if (response && response.status === 'success') {
-        if (response.data instanceof Uint8Array) {
-          resolve(response.data);
-        } else if (response.data && typeof response.data === 'object') {
-          const arr = Object.values(response.data);
-          resolve(new Uint8Array(arr));
-        } else {
-          reject(new Error("Invalid response format received from background."));
-        }
-      } else {
-        reject(new Error(response ? response.message : "Failed to fetch PDF via background worker."));
-      }
-    });
-  });
 }
 
 // --- Initialization ---
@@ -169,9 +144,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   shared.setControlsEnabled(elements, false);
   await shared.loadSharedSettings(uiState, elements);
   shared.applyTheme(uiState.settings.theme, elements.iconTheme);
-  voices = shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError }, voiceRetryRef, (v) => {
-    voices = v;
-  });
+  shared.setupVoiceSelection(uiState, { voiceSelect: elements.voiceSelect, voiceError: elements.voiceError });
 
   // Wire up settings panel event listeners
   shared.wireSettingsListeners(uiState, elements, {
@@ -229,8 +202,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  const query = new URLSearchParams(location.search);
-  pdfUrl = query.get("url");
+  const pdfUrl = new URLSearchParams(location.search).get("url");
 
   if (!pdfUrl) {
     showDropZone();
@@ -241,42 +213,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     new URL(pdfUrl);
   } catch {
     elements.textContent.innerHTML = '<p class="placeholder-text">Invalid PDF URL.</p>';
-    showDropZone();
+    elements.dropZone.classList.remove('hidden');
     return;
   }
 
-  if (pdfUrl.startsWith('file://')) {
-    if (typeof chrome.extension !== 'undefined' && chrome.extension.isAllowedFileSchemeAccess) {
-      chrome.extension.isAllowedFileSchemeAccess(async (isAllowed) => {
-        if (!isAllowed) {
-          console.warn("Extension does not have access to file URLs.");
-          elements.textContent.innerHTML = `
-            <div style="padding: 20px; text-align: center;">
-              <p class="error" style="font-weight: bold; margin-bottom: 12px; color: #ef4444;">Local PDF URL Blocked by Chrome</p>
-              <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 20px; line-height: 1.6;">
-                Chrome extensions require explicit permission to read local files directly.
-              </p>
-              <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 24px; line-height: 1.6;">
-                Please drag and drop your local PDF below to read it instantly, or go to <strong style="color: var(--primary-color)">chrome://extensions</strong>, find "Read Aloud Extension", and check "Allow access to file URLs".
-              </p>
-            </div>
-          `;
-          elements.dropZone.classList.remove('hidden');
-        } else {
-          await loadPdfFromSource(pdfUrl);
-        }
-      });
-    } else {
-      await loadPdfFromSource(pdfUrl);
-    }
-  } else {
-    await loadPdfFromSource(pdfUrl);
+  // Firefox never grants extensions file:// access; Chrome does only when the user enables it
+  if (pdfUrl.startsWith('file://') && !(await chrome.extension.isAllowedFileSchemeAccess())) {
+    elements.textContent.innerHTML = `
+      <div style="padding: 20px; text-align: center;">
+        <p class="error" style="font-weight: bold; margin-bottom: 12px; color: #ef4444;">Local PDF Blocked by the Browser</p>
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 24px; line-height: 1.6;">
+          Drop the PDF below to read it. In Chrome you can instead enable "Allow access to file URLs" for this extension in its details page.
+        </p>
+      </div>
+    `;
+    elements.dropZone.classList.remove('hidden');
+    return;
   }
+  await loadPdfFromSource(pdfUrl);
 });
 
 async function extractPdfText(source) {
-  const param = (source instanceof Uint8Array) ? { data: source } : source;
-  const loadingTask = pdfjsLib.getDocument(param);
+  const param = (source instanceof Uint8Array) ? { data: source } : { url: source };
+  const loadingTask = pdfjsLib.getDocument({ ...param, isEvalSupported: false });
   const pdf = await loadingTask.promise;
   let fullText = "";
 
@@ -323,15 +282,9 @@ async function extractPdfText(source) {
 
 // --- Communication ---
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (sender.id && sender.id !== chrome.runtime.id) {
-    console.warn("Unauthorized message origin:", sender.id);
-    return false;
-  }
-
+chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'UPDATE_UI') {
     shared.handleUpdateUI(uiState, msg.state, shared.createHandleUpdateUICallbacks(uiState, elements));
-    return false;
   }
   return false;
 });
